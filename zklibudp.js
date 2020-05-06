@@ -465,9 +465,16 @@ class ZKLibUDP {
     this.socket.listenerCount('message') < 2 && this.socket.on('message', (data) => {
 
       if (!checkNotEventUDP(data)) return;
-      if (data.length === 18) {
-        cb(decodeRecordRealTimeLog18(data))
-      }
+
+      console.log("el paquete que viene");
+      console.log(data);
+
+      cb(decodeRealTimeEvent(data));
+
+      // if (data.length === 18) {
+      //   cb(decodeRecordRealTimeLog18(data))
+      // }
+
     })
 
   }

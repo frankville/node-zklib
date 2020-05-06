@@ -170,6 +170,54 @@ module.exports.decodeRecordRealTimeLog18 = (recordData)=>{
     return {userId , attTime}
 }
 
+
+const processFingerprintVerifyEvent = (buf) => {
+  const invalidUserIdBuf = Buffer.from([0xff, 0xff,0xff, 0xff]); //this indicates that the operation failed (wrong user)
+  if(!buf.includes(invalidUserIdBuf)) {
+
+    //the verification succeeded...extract the user serial number and return the object
+    return {
+      user_sn: buf.readUIntLE(8, 4)
+    };
+  }else{
+    //return empty object indicating that this was an invalid attempt
+    return {};
+  }
+
+}
+
+const processAttendanceLog = (buf) => {
+
+  let json = {};
+
+  json.user_sn = buf.readUIntLE(8, 2);
+
+  const att_year = buf.readUIntLE(12, 1);
+  const att_month = buf.readUIntLE(13, 1);
+  const att_date = buf.readUIntLE(14, 1);
+  const att_hour = buf.readUIntLE(15, 1);
+  const att_min = buf.readUIntLE(16, 1);
+  const att_sec = buf.readUIntLE(17, 1);
+
+  json.att_date = new Date(att_year,att_month,att_date,att_hour,att_min,att_sec);
+
+  return json;
+
+}
+
+module.exports.decodeRealTimeEvent = (evData)=>{
+  const eventType = evData.readUIntLE(4,2);
+  let json = null;
+
+  switch(eventType){
+    case 128: json = processFingerprintVerifyEvent(evData); break;
+    case 1: json = processAttendanceLog(evData); break;
+  }
+  //const attTime = parseHexToTime(recordData.subarray(12,18))
+  return json;
+  //return {userId , attTime}
+}
+
 module.exports.decodeRecordRealTimeLog52 =(recordData)=>{
   const payload = removeTcpHeader(recordData)
         

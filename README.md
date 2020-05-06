@@ -1,5 +1,12 @@
 # node-zklib
 
+
+
+this is a fork that is intended to read real time attendance events from this device:
+Firmware Version : Ver 6.60 Nov 7 2014
+Platform : ZEM560
+DeviceName : rxC9
+
 - install 
 
 ```
