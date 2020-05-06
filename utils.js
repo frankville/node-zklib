@@ -199,7 +199,7 @@ const processAttendanceLog = (buf) => {
   const att_min = buf.readUIntLE(16, 1);
   const att_sec = buf.readUIntLE(17, 1);
 
-  json.att_date = new Date(att_year,att_month,att_date,att_hour,att_min,att_sec);
+  json.att_date = new Date((2000+att_year),(att_month-1),att_date,att_hour,att_min,att_sec);
 
   return json;
 
@@ -210,8 +210,8 @@ module.exports.decodeRealTimeEvent = (evData)=>{
   let json = null;
 
   switch(eventType){
-    case 128: json = processFingerprintVerifyEvent(evData); break;
-    case 1: json = processAttendanceLog(evData); break;
+    case 128: json = processFingerprintVerifyEvent(evData); json.event_type = 2; break;
+    case 1: json = processAttendanceLog(evData); json.event_type = 1; break;
   }
   //const attTime = parseHexToTime(recordData.subarray(12,18))
   return json;

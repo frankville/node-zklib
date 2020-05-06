@@ -4,6 +4,7 @@ const {
   decodeUserData28,
   decodeRecordData16,
   decodeRecordRealTimeLog18,
+  decodeRealTimeEvent,
   decodeUDPHeader,
   exportErrorMessage,
   checkNotEventUDP
@@ -463,6 +464,9 @@ class ZKLibUDP {
     })
 
     this.socket.listenerCount('message') < 2 && this.socket.on('message', (data) => {
+
+      console.log("data previo al check...");
+      console.log(data);
 
       if (!checkNotEventUDP(data)) return;
 
