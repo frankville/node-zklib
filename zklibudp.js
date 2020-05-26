@@ -23,6 +23,10 @@ class ZKLibUDP {
     this.sessionId = null
     this.replyId = 0
     this.inport = inport
+    this.logger = null;
+    this.keepAlive = false;
+    this.keepAliveTO = 10000;
+    this.timeoutCounter = 0;
   }
 
   createSocket(cbError, cbClose) {
@@ -45,6 +49,7 @@ class ZKLibUDP {
       try {
         this.socket.bind(this.inport)
       } catch (err) {
+        
       }
 
     })
@@ -73,14 +78,14 @@ class ZKLibUDP {
         clearTimeout(timer)
         resolve(true)
       })
-
+      
       /**
        * When socket isn't connected so this.socket.end will never resolve
        * we use settimeout for handling this case
        */
       const timer = setTimeout(() => {
         resolve(true)
-      }, 2000)
+      }, 2000);
     })
   }
 
@@ -412,7 +417,38 @@ class ZKLibUDP {
 
   }
 
+  execKeepAlive(toutErrorCb) {
 
+    //send a door state request every x seconds to maintain the session alive
+    if(this.keepAlive){
+
+      this.executeCmd(COMMANDS.CMD_DOORSTATE_RRQ, '').then(()=>{
+        this.timeoutCounter = 0;
+        setTimeout(()=>{
+          this.execKeepAlive(toutErrorCb);
+        },this.keepAliveTO);
+
+      }).catch(err => {
+
+        console.log((new Date()).toISOString()+" -- zklibudp.js -- Error executing keep alive: "+JSON.stringify(err)+" "+err.toString()+" -- timeoutCounter: "+this.timeoutCounter);
+        this.timeoutCounter++;
+
+        if(this.timeoutCounter > 1){
+          this.timeoutCounter = 0;
+          toutErrorCb(this.ip);
+        }else{
+          setTimeout(()=>{
+            this.execKeepAlive(toutErrorCb);
+          },this.keepAliveTO);
+        }
+
+        
+
+      });
+
+
+    }
+  }
 
   async freeData() {
     return await this.executeCmd(COMMANDS.CMD_FREE_DATA, '')
@@ -447,7 +483,9 @@ class ZKLibUDP {
 
   async disconnect() {
     try {
+      this.keepAlive = false;
       await this.executeCmd(COMMANDS.CMD_EXIT, '')
+      
     } catch (err) {
     }
     return await this.closeSocket()
@@ -457,23 +495,27 @@ class ZKLibUDP {
 
   async getRealTimeLogs(cb = () => { }) {
     this.replyId++;
+    
     const buf = createUDPHeader(COMMANDS.CMD_REG_EVENT, this.sessionId, this.replyId, REQUEST_DATA.GET_REAL_TIME_EVENT)
 
     this.socket.send(buf, 0, buf.length, this.port, this.ip, (err) => {
+      // if(err){
+      //   console.log("error en send packet to socket...");
+      //   console.log(err);
+      // }
+      
+    });
 
-    })
-
-    this.socket.listenerCount('message') < 2 && this.socket.on('message', (data) => {
-
-      console.log("data previo al check...");
-      console.log(data);
+    this.socket.on('message', (data) => {
 
       if (!checkNotEventUDP(data)) return;
 
-      console.log("el paquete que viene");
-      console.log(data);
+      //console.log((new Date()).toLocaleString()+" -- "+"el mensaje UDP que viene "+data.toString("hex").match(/(..?)/g).join(" "))
+
+
 
       cb(decodeRealTimeEvent(data));
+      
 
       // if (data.length === 18) {
       //   cb(decodeRecordRealTimeLog18(data))

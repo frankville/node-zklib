@@ -4,15 +4,17 @@ const ZKLibUDP = require('./zklibudp')
 const { ZKError , ERROR_TYPES } = require('./zkerror')
 
 class ZKLib {
-    constructor(ip, port, timeout , inport){
-        this.connectionType = null
+    constructor(ip, port, timeout ,connType, inport){
+        this.connectionType = connType;
 
         this.zklibTcp = new ZKLibTCP(ip,port,timeout) 
         this.zklibUdp = new ZKLibUDP(ip,port,timeout , inport) 
         this.interval = null 
         this.timer = null
         this.isBusy = false
-        this.ip = ip
+        this.ip = ip,
+        this.keepAlive = false;
+        this.keepAliveTO = 10000;
     }
 
     async functionWrapper (tcpCallback, udpCallback , command ){
@@ -65,65 +67,85 @@ class ZKLib {
         }
     }
 
-    async createSocket(cbErr, cbClose){
-        try{
-            if(!this.zklibTcp.socket){
+    async createSocket(cbErr, cbClose,toutCb){
+            //toutCb is a callback that is called when the keep alive function resulted in 3 timeouts. 
+            //This indicates that it has to reconnect again to the device.
+            if(this.connectionType === 'tcp'){
+
                 try{
-                    await this.zklibTcp.createSocket(cbErr,cbClose)
-                   
+
+                    if(!this.zklibTcp.socket){
+                        try{
+                            await this.zklibTcp.createSocket(cbErr,cbClose)
+                           
+        
+                        }catch(err){
+                            throw err;
+                        }
+                      
+                        try{
+                            await this.zklibTcp.connect();
+                            
+                        }catch(err){
+                            throw err;
+                        }
+                    }
+
+                    return true;
 
                 }catch(err){
-                    throw err;
-                }
-              
-                try{
-                    await this.zklibTcp.connect();
-                    console.log('ok tcp')
-                }catch(err){
-                    throw err;
-                }
-            }      
-
-            this.connectionType = 'tcp'
-
-        }catch(err){
-            try{
-                await this.zklibTcp.disconnect()
-            }catch(err){}
-
-            if(err.code !== ERROR_TYPES.ECONNREFUSED){
-                return Promise.reject(new ZKError(err, 'TCP CONNECT' , this.ip))
-            }
-
-            try {
-                if(!this.zklibUdp.socket){
-                    await this.zklibUdp.createSocket(cbErr, cbClose)
-                    await this.zklibUdp.connect()
-                }   
-                
-                console.log('ok udp')
-                this.connectionType = 'udp'
-            }catch(err){
-
-
-
-                if(err.code !== 'EADDRINUSE'){
-                    this.connectionType = null
                     try{
-                        await this.zklibUdp.disconnect()
-                        this.zklibUdp.socket = null
-                        this.zklibTcp.socket = null
+                        await this.zklibTcp.disconnect()
                     }catch(err){}
+        
+                    if(err.code !== ERROR_TYPES.ECONNREFUSED){
+                        return Promise.reject(new ZKError(err, 'TCP CONNECT' , this.ip))
+                    }
 
+                }
+                
+            }else{
 
-                    return Promise.reject(new ZKError(err, 'UDP CONNECT' , this.ip))
-                }else{
-                    this.connectionType = 'udp'
+                try {
+
+                    if(!this.zklibUdp.socket){
+                        await this.zklibUdp.createSocket(cbErr, cbClose)
+                        await this.zklibUdp.connect()
+
+                    }   
+                    
+                    this.zklibUdp.keepAlive = this.keepAlive;
+                    this.zklibUdp.keepAliveTO = this.keepAliveTO;
+                    this.execKeepAlive(toutCb);
+                   
+                    return true;
+                }catch(err){
+    
+                    if(err.code !== 'EADDRINUSE'){
+                       
+                        try{
+                            await this.zklibUdp.disconnect()
+                            this.zklibUdp.socket = null
+                            this.zklibTcp.socket = null
+                        }catch(err){
+                            //console.log(err);
+                        }
+    
+    
+                        return Promise.reject(new ZKError(err, 'UDP CONNECT' , this.ip))
+                    }else{
+                        return Promise.reject(new ZKError(err, 'UDP EADDRINUSE' , this.ip))
+                    }
                     
                 }
-                
+
             }
-        }
+
+    }
+
+    execKeepAlive(toutCb){
+        this.zklibUdp.execKeepAlive(toutCb);
+        return true;
     }
 
     async getUsers(){
@@ -141,17 +163,36 @@ class ZKLib {
     }
 
     async getRealTimeLogs(cb){
-        return await this.functionWrapper(
-            ()=> this.zklibTcp.getRealTimeLogs(cb),
-            ()=> this.zklibUdp.getRealTimeLogs(cb)
-        )
+        try{
+
+            await this.functionWrapper(
+                ()=> this.zklibTcp.getRealTimeLogs(cb),
+                ()=> this.zklibUdp.getRealTimeLogs(cb)
+            )
+            return true;
+
+        }catch(err){
+            console.log("hubo un error en getrealtimelogs... ");
+
+            console.log(err);
+            return false;
+        }
+        
     }
 
     async disconnect(){
-        return await this.functionWrapper(
-            ()=> this.zklibTcp.disconnect(),
-            ()=> this.zklibUdp.disconnect()
-        )
+        this.keepAlive = false;
+        try{
+
+            await this.functionWrapper(
+                ()=> this.zklibTcp.disconnect(),
+                ()=> this.zklibUdp.disconnect()
+            );
+
+        }catch(err){
+            throw err;
+        }
+         
     }
 
     async freeData(){

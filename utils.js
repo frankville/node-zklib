@@ -157,10 +157,12 @@ module.exports.decodeRecordData40 = (recordData)=>{
 }
 
 module.exports.decodeRecordData16 = (recordData)=>{
+
     const record = {
         deviceUserId: recordData.readUIntLE(0, 2),
         recordTime: parseTimeToDate(recordData.readUInt32LE(4))
     }
+
     return record
 }
 
@@ -168,6 +170,45 @@ module.exports.decodeRecordRealTimeLog18 = (recordData)=>{
     const userId = recordData.readUIntLE(8,1)
     const attTime = parseHexToTime(recordData.subarray(12,18))
     return {userId , attTime}
+}
+
+const processAlarmLog = (buf) => {
+
+  let json = {};
+
+  let bufAsArray = buf.toString("hex").match(/(..?)/g);
+
+  let alarm_type = "";
+
+  switch(bufAsArray[8]){
+    case "35": alarm_type = "exit_button";break;
+    case "36": alarm_type = "door_state"; break;
+    case "37": alarm_type = "tamper";break;
+    case "3A": alarm_type = "misoperation";break;
+    default: alarm_type = "unknown (0x"+bufAsArray[8]+")";
+  }
+
+  json.alarm_type = alarm_type;
+
+  let alarm_event = "";
+
+  if(buf.byteLength === 16){
+
+    switch(bufAsArray[12]){
+      case "01": alarm_event = "door_left_open";break;
+      case "04": alarm_event = "door_not_closed"; break;
+      case "05": alarm_event = "door_closed";break;
+      default: alarm_event = "unknown (0x"+bufAsArray[12]+")";
+    }
+
+    json.alarm_event = alarm_event;
+
+  }
+
+  
+
+  return json;
+
 }
 
 
@@ -192,6 +233,10 @@ const processAttendanceLog = (buf) => {
 
   json.user_sn = buf.readUIntLE(8, 2);
 
+  json.verif_type = buf.readUIntLE(10, 1);
+
+  json.verif_state = buf.readUIntLE(11, 1);
+
   const att_year = buf.readUIntLE(12, 1);
   const att_month = buf.readUIntLE(13, 1);
   const att_date = buf.readUIntLE(14, 1);
@@ -205,14 +250,20 @@ const processAttendanceLog = (buf) => {
 
 }
 
+
+
 module.exports.decodeRealTimeEvent = (evData)=>{
   const eventType = evData.readUIntLE(4,2);
   let json = null;
 
   switch(eventType){
-    case 128: json = processFingerprintVerifyEvent(evData); json.event_type = 2; break;
-    case 1: json = processAttendanceLog(evData); json.event_type = 1; break;
+    case 128: json = processFingerprintVerifyEvent(evData); break;
+    case 1: json = processAttendanceLog(evData); break;
+    case 512: json = processAlarmLog(evData);  break;
+    default : json = {}; json.event_type = eventType; json.full_data = evData;
   }
+
+  json.event_type = eventType;
   //const attTime = parseHexToTime(recordData.subarray(12,18))
   return json;
   //return {userId , attTime}
