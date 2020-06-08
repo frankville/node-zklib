@@ -18,53 +18,65 @@ class ZKLib {
     }
 
     async functionWrapper (tcpCallback, udpCallback , command ){
-        switch(this.connectionType){
-            case 'tcp':
-                if(this.zklibTcp.socket){
-                    try{
-                        const res =  await tcpCallback()
-                        return res
-                    }catch(err){
-                        return Promise.reject(new ZKError(
-                            err,
-                            `[TCP] ${command}`,
+        try{
+
+            switch(this.connectionType){
+                case 'tcp':
+                    if(this.zklibTcp.socket){
+                        try{
+                            const res =  await tcpCallback()
+                            return res
+                        }catch(err){
+                            //return Promise.reject()
+                            throw new ZKError(
+                                err,
+                                `[TCP] ${command}`,
+                                this.ip
+                            );
+                        }
+                           
+                    }else{
+                        //return Promise.reject()
+                        throw new ZKError(
+                            new Error( `Socket isn't connected !`),
+                            `[TCP]`,
                             this.ip
-                        ))
+                        );
                     }
-                       
-                }else{
-                    return Promise.reject(new ZKError(
-                        new Error( `Socket isn't connected !`),
-                        `[TCP]`,
-                        this.ip
-                    ))
-                }
-            case 'udp':
-                if(this.zklibUdp.socket){
-                    try{
-                        const res =  await udpCallback()
-                        return res
-                    }catch(err){
-                        return Promise.reject(new ZKError(
-                            err,
-                            `[UDP] ${command}`,
+                case 'udp':
+                    if(this.zklibUdp.socket){
+                        try{
+                            const res =  await udpCallback()
+                            return res
+                        }catch(err){
+                            //return Promise.reject()
+                            throw new ZKError(
+                                err,
+                                `[UDP] ${command}`,
+                                this.ip
+                            );
+                        }    
+                    }else{
+                        //return Promise.reject()
+                        throw new ZKError(
+                            new Error( `Socket isn't connected !`),
+                            `[UDP]`,
                             this.ip
-                        ))
-                    }    
-                }else{
-                    return Promise.reject(new ZKError(
+                        );
+                    }
+                default:
+                    //return Promise.reject()
+                    throw new ZKError(
                         new Error( `Socket isn't connected !`),
-                        `[UDP]`,
+                        '',
                         this.ip
-                    ))
-                }
-            default:
-                return Promise.reject(new ZKError(
-                    new Error( `Socket isn't connected !`),
-                    '',
-                    this.ip
-                ))
+                    );
+            }
+
+        }catch(err){
+            throw err;
         }
+        
     }
 
     async createSocket(cbErr, cbClose,toutCb){
