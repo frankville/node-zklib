@@ -184,7 +184,7 @@ const processAlarmLog = (buf) => {
     case "35": alarm_type = "exit_button";break;
     case "36": alarm_type = "door_state"; break;
     case "37": alarm_type = "tamper";break;
-    case "3A": alarm_type = "misoperation";break;
+    case "3a": alarm_type = "misoperation";break;
     default: alarm_type = "unknown (0x"+bufAsArray[8]+")";
   }
 
