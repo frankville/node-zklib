@@ -442,6 +442,15 @@ class ZKLibTCP {
     return await this.executeCmd(COMMANDS.CMD_ENABLEDEVICE, '')
   }
 
+  async restartDevice() {
+    try {
+      await this.executeCmd(COMMANDS.CMD_RESTART, '')
+    } catch (err) {
+
+    }
+    return await this.closeSocket()
+  }
+
   async disconnect() {
     try {
       await this.executeCmd(COMMANDS.CMD_EXIT, '')

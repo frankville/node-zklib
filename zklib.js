@@ -192,6 +192,13 @@ class ZKLib {
         
     }
 
+    async restartDevice(){
+        return await this. functionWrapper(
+            ()=> this.zklibTcp.restartDevice(),
+            ()=> this.zklibUdp.restartDevice()
+        )
+    }
+
     async disconnect(){
         this.keepAlive = false;
         try{

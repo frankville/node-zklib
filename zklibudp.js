@@ -481,6 +481,10 @@ class ZKLibUDP {
     return await this.executeCmd(COMMANDS.CMD_ENABLEDEVICE, '')
   }
 
+  async restartDevice() {
+    return await this.executeCmd(COMMANDS.CMD_RESTART, '')
+  }
+
   async disconnect() {
     try {
       this.keepAlive = false;
