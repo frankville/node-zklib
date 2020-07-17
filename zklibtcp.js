@@ -442,6 +442,10 @@ class ZKLibTCP {
     return await this.executeCmd(COMMANDS.CMD_ENABLEDEVICE, '')
   }
 
+  async openDoor() {
+    return await this.executeCmd(COMMANDS.CMD_UNLOCK, '15');
+  }
+
   async restartDevice() {
     try {
       await this.executeCmd(COMMANDS.CMD_RESTART, '')

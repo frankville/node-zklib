@@ -192,6 +192,13 @@ class ZKLib {
         
     }
 
+    async openDoor(){
+        return await this. functionWrapper(
+            ()=> this.zklibTcp.openDoor(),
+            ()=> this.zklibUdp.openDoor()
+        )
+    }
+
     async restartDevice(){
         return await this. functionWrapper(
             ()=> this.zklibTcp.restartDevice(),

@@ -485,6 +485,10 @@ class ZKLibUDP {
     return await this.executeCmd(COMMANDS.CMD_RESTART, '')
   }
 
+  async openDoor() {
+    return await this.executeCmd(COMMANDS.CMD_UNLOCK, '15');
+  }
+
   async disconnect() {
     try {
       this.keepAlive = false;
