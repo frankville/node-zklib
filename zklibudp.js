@@ -26,7 +26,9 @@ class ZKLibUDP {
     this.logger = null;
     this.keepAlive = false;
     this.keepAliveTO = 10000;
+    this.openDoorDelaySec = 3;
     this.timeoutCounter = 0;
+    
   }
 
   createSocket(cbError, cbClose) {
@@ -486,7 +488,7 @@ class ZKLibUDP {
   }
 
   async openDoor() {
-    return await this.executeCmd(COMMANDS.CMD_UNLOCK, '15');
+    return await this.executeCmd(COMMANDS.CMD_UNLOCK, this.openDoorDelaySec.toString());
   }
 
   async disconnect() {

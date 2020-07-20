@@ -18,7 +18,8 @@ class ZKLibTCP {
     this.timeout = timeout
     this.sessionId = null
     this.replyId = 0
-    this.socket = null
+    this.socket = null;
+    this.openDoorDelaySec = 3;
   }
 
 
@@ -443,7 +444,7 @@ class ZKLibTCP {
   }
 
   async openDoor() {
-    return await this.executeCmd(COMMANDS.CMD_UNLOCK, '15');
+    return await this.executeCmd(COMMANDS.CMD_UNLOCK, this.openDoorDelaySec.toString());
   }
 
   async restartDevice() {

@@ -15,6 +15,7 @@ class ZKLib {
         this.ip = ip,
         this.keepAlive = false;
         this.keepAliveTO = 10000;
+        this.openDoorDelaySec = 3;
     }
 
     async functionWrapper (tcpCallback, udpCallback , command ){
@@ -88,7 +89,8 @@ class ZKLib {
 
                     if(!this.zklibTcp.socket){
                         try{
-                            await this.zklibTcp.createSocket(cbErr,cbClose)
+                            await this.zklibTcp.createSocket(cbErr,cbClose);
+                            this.zklibTcp.openDoorDelaySec = this.openDoorDelaySec;
                            
         
                         }catch(err){
@@ -128,6 +130,7 @@ class ZKLib {
                     
                     this.zklibUdp.keepAlive = this.keepAlive;
                     this.zklibUdp.keepAliveTO = this.keepAliveTO;
+                    this.zklibUdp.openDoorDelaySec = this.openDoorDelaySec;
                     this.execKeepAlive(toutCb);
                    
                     return true;
