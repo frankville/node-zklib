@@ -7,7 +7,8 @@ const { createTCPHeader,
   decodeRecordData40,
   decodeRecordRealTimeLog52,
   checkNotEventTCP,
-  decodeTCPHeader } = require('./utils')
+  decodeTCPHeader,
+  encodeUserInfo72 } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
 
@@ -481,6 +482,30 @@ class ZKLibTCP {
 
   async clearAttendanceLog (){
     return await this.executeCmd(COMMANDS.CMD_CLEAR_ATTLOG, '')
+  }
+
+  async setUser(userInfo = {}) {
+    const payload = Buffer.isBuffer(userInfo) ? userInfo : encodeUserInfo72(userInfo);
+    return await this.executeCmd(COMMANDS.CMD_USER_WRQ, payload);
+  }
+
+  async deleteUser(uid) {
+    if (Buffer.isBuffer(uid)) {
+      return await this.executeCmd(COMMANDS.CMD_DELETE_USER, uid);
+    }
+
+    const numericUid = Number(uid);
+    if (!Number.isInteger(numericUid) || numericUid < 0) {
+      throw new Error('deleteUser: uid must be a non-negative integer');
+    }
+
+    const buf = Buffer.alloc(2);
+    buf.writeUInt16LE(numericUid, 0);
+    return await this.executeCmd(COMMANDS.CMD_DELETE_USER, buf);
+  }
+
+  async refreshData() {
+    return await this.executeCmd(COMMANDS.CMD_REFRESHDATA, '')
   }
 
   async getRealTimeLogs(cb = () => { }) {

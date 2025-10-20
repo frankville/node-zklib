@@ -143,6 +143,125 @@ module.exports.decodeUserData72 = (userData)=>{
       return user;
 }
 
+const sanitizeAscii = (value) => {
+    if (value === undefined || value === null) {
+        return '';
+    }
+    const str = value.toString();
+    return str.replace(/[^\x00-\x7F]/g, '');
+};
+
+const writeAsciiField = (buf, value, offset, length) => {
+    const clean = sanitizeAscii(value);
+    const fieldBuf = Buffer.alloc(length);
+    fieldBuf.fill(0);
+    if (!clean.length) {
+        fieldBuf.copy(buf, offset);
+        return;
+    }
+    const truncated = Buffer.from(clean, 'ascii').subarray(0, Math.max(length - 1, 0));
+    truncated.copy(fieldBuf, 0);
+    fieldBuf.copy(buf, offset);
+};
+
+const buildPermissionToken = (roleValue, enabled) => {
+    let token = 0;
+    const normalized = Number.isFinite(roleValue) ? roleValue : 0;
+    if (normalized & 0x1) {
+        token |= 0x02;
+    }
+    if (normalized & 0x2) {
+        token |= 0x04;
+    }
+    if (normalized & 0x4) {
+        token |= 0x08;
+    }
+    if (enabled === false) {
+        token |= 0x01;
+    }
+    return token & 0xFF;
+};
+
+const ROLE_NAME_TO_VALUE = {
+    user: 0,
+    enroller: 1,
+    admin: 3,
+    superadmin: 7
+};
+
+const toUInt16 = (value, fallback = 0) => {
+    if (value === undefined || value === null || Number.isNaN(Number(value))) {
+        return fallback;
+    }
+    const num = Number(value);
+    if (num < 0) {
+        return 0;
+    }
+    if (num > 0xFFFF) {
+        return 0xFFFF;
+    }
+    return num;
+};
+
+const toUInt32 = (value, fallback = 0) => {
+    if (value === undefined || value === null || Number.isNaN(Number(value))) {
+        return fallback >>> 0;
+    }
+    const num = Number(value);
+    if (num < 0) {
+        return 0;
+    }
+    if (num > 0xFFFFFFFF) {
+        return 0xFFFFFFFF;
+    }
+    return num >>> 0;
+};
+
+module.exports.encodeUserInfo72 = (options = {}) => {
+    const payload = Buffer.alloc(72);
+    payload.fill(0);
+
+    if (options.uid === undefined || options.uid === null) {
+        throw new Error('encodeUserInfo72: uid is required');
+    }
+
+    payload.writeUInt16LE(toUInt16(options.uid), 0);
+
+    let permissionToken;
+    if (options.permissionToken !== undefined && options.permissionToken !== null) {
+        permissionToken = options.permissionToken & 0xFF;
+    } else {
+        let roleValue = options.role;
+        if (typeof roleValue === 'string') {
+            roleValue = ROLE_NAME_TO_VALUE[roleValue.toLowerCase().trim()] ?? 0;
+        }
+        permissionToken = buildPermissionToken(Number(roleValue) || 0, options.enabled !== false);
+    }
+    payload.writeUInt8(permissionToken, 2);
+
+    writeAsciiField(payload, options.password || '', 3, 8);
+    writeAsciiField(payload, options.name || '', 11, 24);
+
+    payload.writeUInt32LE(toUInt32(options.cardNumber, options.cardno || 0), 35);
+    payload.writeUInt8(toUInt16(options.groupNumber ?? options.group ?? 1) & 0xFF, 39);
+
+    const explicitTzFlag = options.userTimezoneFlag;
+    const useGroupTimezones = options.useGroupTimezones;
+    const tzFlag = explicitTzFlag !== undefined && explicitTzFlag !== null
+        ? toUInt16(explicitTzFlag)
+        : (useGroupTimezones === false || (options.timezones && options.timezones.length > 0) ? 1 : 0);
+    payload.writeUInt16LE(tzFlag, 40);
+
+    const timezones = Array.isArray(options.timezones) ? options.timezones : [];
+    payload.writeUInt16LE(toUInt16(timezones[0] ?? 0), 42);
+    payload.writeUInt16LE(toUInt16(timezones[1] ?? 0), 44);
+    payload.writeUInt16LE(toUInt16(timezones[2] ?? 0), 46);
+
+    writeAsciiField(payload, options.userId ?? options.userid ?? '', 48, 9);
+
+    return payload;
+};
+
 module.exports.decodeRecordData40 = (recordData)=>{
     const record = {
         userSn: recordData.readUIntLE(0, 2),

@@ -93,3 +93,33 @@ test()
     executeCmd(CMD.CMD_UNLOCK, '')
 
 ```
+
+## Tests
+
+> Note: this copy lives inside `node_modules/` of the main project, so remember to upstream any local edits to your fork if you need them to persist.
+
+- Unit tests live under `test/*.spec.js` and exercise `encodeUserInfo72` plus the new TCP/UDP helpers `setUser`, `deleteUser`, and `refreshData`.
+- There is an optional end-to-end spec (`test/e2e-user-lifecycle.spec.js`) that drives a create → update → delete cycle against a physical device.  
+  It is skipped automatically unless the required environment variables are provided.
+
+### Run unit tests
+
+```bash
+npx mocha test/*.spec.js
+```
+
+### Run the end-to-end test
+
+```bash
+export ZKLIB_E2E_IP=192.168.1.100   # Device IP address
+export ZKLIB_E2E_PORT=4370          # Optional, device port
+npx mocha test/*.spec.js
+```
+
+Additional environment variables:
+
+- `ZKLIB_E2E_INPORT` to change the UDP listening port (default 5500).
+- `ZKLIB_E2E_SOCKET_TIMEOUT` to tweak the connection timeout (default 10000 ms).
+- `ZKLIB_E2E_TIMEOUT` to override Mocha’s timeout for the e2e suite (default 45000 ms).
+
+**Warning:** the end-to-end scenario mutates real users on the device. Use a dedicated UID or a lab unit.

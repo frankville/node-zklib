@@ -177,6 +177,27 @@ class ZKLib {
         )
     }
 
+    async setUser(userInfo){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setUser(userInfo),
+            ()=> this.zklibUdp.setUser(userInfo)
+        )
+    }
+
+    async deleteUser(uid){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.deleteUser(uid),
+            ()=> this.zklibUdp.deleteUser(uid)
+        )
+    }
+
+    async refreshData(){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.refreshData(),
+            ()=> this.zklibUdp.refreshData()
+        )
+    }
+
     async getRealTimeLogs(cb){
         try{
 
