@@ -159,8 +159,11 @@ const writeAsciiField = (buf, value, offset, length) => {
         fieldBuf.copy(buf, offset);
         return;
     }
-    const truncated = Buffer.from(clean, 'ascii').subarray(0, Math.max(length - 1, 0));
-    truncated.copy(fieldBuf, 0);
+    const asciiBuf = Buffer.from(clean, 'ascii');
+    const sliceLength = Math.min(asciiBuf.length, Math.max(length, 0));
+    if (sliceLength > 0) {
+        asciiBuf.copy(fieldBuf, 0, 0, sliceLength);
+    }
     fieldBuf.copy(buf, offset);
 };
 
@@ -258,6 +261,40 @@ module.exports.encodeUserInfo72 = (options = {}) => {
     payload.writeUInt16LE(toUInt16(timezones[2] ?? 0), 46);
 
     writeAsciiField(payload, options.userId ?? options.userid ?? '', 48, 9);
+
+    return payload;
+};
+
+module.exports.encodeUserInfo28 = (options = {}) => {
+    const payload = Buffer.alloc(28);
+    payload.fill(0);
+
+    if (options.uid === undefined || options.uid === null) {
+        throw new Error('encodeUserInfo28: uid is required');
+    }
+
+    payload.writeUInt16LE(toUInt16(options.uid), 0);
+
+    let permissionToken;
+    if (options.permissionToken !== undefined && options.permissionToken !== null) {
+        permissionToken = options.permissionToken & 0xFF;
+    } else {
+        let roleValue = options.role;
+        if (typeof roleValue === 'string') {
+            roleValue = ROLE_NAME_TO_VALUE[roleValue.toLowerCase().trim()] ?? 0;
+        }
+        permissionToken = buildPermissionToken(Number(roleValue) || 0, options.enabled !== false);
+    }
+    payload.writeUInt8(permissionToken, 2);
+
+    writeAsciiField(payload, options.password || '', 3, 5);
+    writeAsciiField(payload, options.name || '', 8, 8);
+
+    const userIdValue = toUInt32(
+        options.userId ?? options.userid ?? options.uid,
+        toUInt32(options.uid)
+    );
+    payload.writeUInt32LE(userIdValue, 24);
 
     return payload;
 };

@@ -21,8 +21,22 @@ describe('ZKLibUDP user management helpers', () => {
     const [command, data] = executeStub.firstCall.args;
     expect(command).to.equal(COMMANDS.CMD_USER_WRQ);
     expect(Buffer.isBuffer(data)).to.equal(true);
-    expect(data.length).to.equal(72);
+    expect(data.length).to.equal(28);
     expect(data.readUInt16LE(0)).to.equal(99);
+    expect(data.toString('ascii', 8, 16).replace(/\0+$/, '')).to.equal('Spec Tes');
+  });
+
+  it('supports extended packet size when requested', async () => {
+    const zk = new ZKLibUDP('127.0.0.1', 4370, 1000, 5500);
+    const executeStub = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+
+    await zk.setUser({ uid: 12, name: 'Extended User', packetSize: 72 });
+
+    expect(executeStub.calledOnce).to.equal(true);
+    const [command, data] = executeStub.firstCall.args;
+    expect(command).to.equal(COMMANDS.CMD_USER_WRQ);
+    expect(data.length).to.equal(72);
+    expect(data.readUInt16LE(0)).to.equal(12);
   });
 
   it('passes buffers through setUser unchanged', async () => {

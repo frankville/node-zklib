@@ -8,7 +8,8 @@ const {
   decodeUDPHeader,
   exportErrorMessage,
   checkNotEventUDP,
-  encodeUserInfo72
+  encodeUserInfo72,
+  encodeUserInfo28
 } = require('./utils')
 
 const { MAX_CHUNK, REQUEST_DATA, COMMANDS } = require('./constants')
@@ -476,7 +477,11 @@ class ZKLibUDP {
   }
 
   async setUser(userInfo = {}) {
-    const payload = Buffer.isBuffer(userInfo) ? userInfo : encodeUserInfo72(userInfo);
+    const encoder = (
+      userInfo &&
+      (userInfo.packetSize === 72 || userInfo.format === 'ssr')
+    ) ? encodeUserInfo72 : encodeUserInfo28;
+    const payload = Buffer.isBuffer(userInfo) ? userInfo : encoder(userInfo);
     return await this.executeCmd(COMMANDS.CMD_USER_WRQ, payload);
   }
 

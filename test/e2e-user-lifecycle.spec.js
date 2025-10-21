@@ -17,7 +17,7 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
   let zk = null;
 
   before(async () => {
-    zk = new ZKLib(ip, port, timeoutMs, inport);
+    zk = new ZKLib(ip, port, timeoutMs, 'udp', inport);
     await zk.createSocket();
   });
 
@@ -41,11 +41,11 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
   it('creates, updates and deletes a user on the device', async () => {
     const uidBase = Number(process.env.ZKLIB_E2E_UID_BASE || 60000);
     const uid = uidBase + Math.floor(Math.random() * 1000);
-    const userId = `E2E${uid}`;
+    const userId = uid;
     const baseUser = {
       uid,
       userId,
-      name: 'E2E User',
+      name: 'E2EUSR',
       password: '4321',
       enabled: true,
       role: 'user'
@@ -65,7 +65,7 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
 
       await zk.setUser({
         ...baseUser,
-        name: 'E2E User Updated'
+        name: 'E2EUSR2'
       });
       await zk.refreshData();
 
@@ -74,7 +74,7 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
         (user) => Number(user.uid ?? user.user_sn ?? user.userSn) === uid
       );
       expect(updatedUser, 'user should still exist after update').to.exist;
-      expect((updatedUser.name || '').replace(/\0+$/, '').trim()).to.equal('E2E User Updated');
+      expect((updatedUser.name || '').replace(/\0+$/, '').trim()).to.equal('E2EUSR2');
     } finally {
       if (created) {
         await zk.deleteUser(uid).catch(() => {});
