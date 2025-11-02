@@ -404,7 +404,7 @@ module.exports.encodeUserGroupInfo = (options = {}) => {
         throw new Error('encodeUserGroupInfo: uid is required');
     }
 
-    buffer.writeUInt8(toUInt16(options.uid) & 0xFF, 0);
+    buffer.writeUInt32LE(toUInt32(options.uid), 0);
     buffer.writeUInt8(toUInt16(options.group ?? options.groupNumber ?? 1) & 0xFF, 4);
 
     return buffer;

@@ -144,3 +144,5 @@ Additional environment variables:
 - `ZKLIB_E2E_TIMEOUT` to override Mocha’s timeout for the e2e suite (default 45000 ms).
 
 **Warning:** the end-to-end scenario mutates real users on the device. Use a dedicated UID or a lab unit.
+
+**User ID note:** legacy commands (notably `CMD_USERGRP_WRQ/RRQ`) only transmit the low byte of the UID. Keep test/account UIDs ≤ 255 whenever you intend to manage group membership programmatically.
