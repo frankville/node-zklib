@@ -480,17 +480,25 @@ module.exports.encodeGroupTimezoneInfo = (options = {}) => {
 };
 
 module.exports.decodeGroupTimezoneInfo = (data) => {
-    if (!Buffer.isBuffer(data) || data.length < 8) {
-        throw new Error('decodeGroupTimezoneInfo: invalid buffer');
+    if (!Buffer.isBuffer(data) || data.length === 0) {
+        return {
+            group: 0,
+            timezones: [0, 0, 0],
+            verifyStyle: 0,
+            holiday: false
+        };
     }
 
-    const verifyByte = data.readUInt8(7);
+    const safeReadUInt16 = (buf, offset) => (buf.length >= offset + 2 ? buf.readUInt16LE(offset) : 0);
+    const safeReadUInt8 = (buf, offset, fallback = 0) => (buf.length > offset ? buf.readUInt8(offset) : fallback);
+
+    const verifyByte = safeReadUInt8(data, 7, 0);
     return {
-        group: data.readUInt8(0),
+        group: safeReadUInt8(data, 0, 0),
         timezones: [
-            data.readUInt16LE(1),
-            data.readUInt16LE(3),
-            data.readUInt16LE(5)
+            safeReadUInt16(data, 1),
+            safeReadUInt16(data, 3),
+            safeReadUInt16(data, 5)
         ],
         verifyStyle: verifyByte & 0x7F,
         holiday: (verifyByte & 0x80) === 0x80

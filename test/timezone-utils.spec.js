@@ -93,6 +93,14 @@ describe('Timezone encoding helpers', () => {
     expect(decoded.holiday).to.equal(true);
   });
 
+  it('decodes group timezone info even when buffer is short', () => {
+    const decoded = decodeGroupTimezoneInfo(Buffer.from([2]));
+    expect(decoded.group).to.equal(2);
+    expect(decoded.timezones).to.deep.equal([0, 0, 0]);
+    expect(decoded.verifyStyle).to.equal(0);
+    expect(decoded.holiday).to.equal(false);
+  });
+
   it('encodes user group info', () => {
     const buffer = encodeUserGroupInfo({ uid: 10, group: 7 });
     expect(buffer.length).to.equal(5);
