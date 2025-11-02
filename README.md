@@ -94,11 +94,31 @@ test()
 
 ```
 
+## Timezone Helpers
+
+This fork now exposes convenience methods to manage timezones and assignments:
+
+```js
+await zkInstance.setTimezone({
+  index: 5,
+  days: {
+    monday: { startHour: 8, startMinute: 0, endHour: 18, endMinute: 0 }
+  }
+});
+
+const tz = await zkInstance.getTimezone(5); // => { index, days }
+
+await zkInstance.setUserTimezones({ uid: 123, timezones: [5], useUserTimezones: true });
+await zkInstance.setGroupTimezones({ group: 2, timezones: [5, 0, 0], verifyStyle: 0 });
+```
+
+Each helper wraps the low-level commands (`CMD_TZ_WRQ`, `CMD_TZ_RRQ`, `CMD_USERTZ_WRQ`, `CMD_GRPTZ_WRQ`), handling byte encoding for you. Use `getUserTimezones` / `getGroupTimezones` to inspect current assignments.
+
 ## Tests
 
 > Note: this copy lives inside `node_modules/` of the main project, so remember to upstream any local edits to your fork if you need them to persist.
 
-- Unit tests live under `test/*.spec.js` and exercise `encodeUserInfo72` plus the new TCP/UDP helpers `setUser`, `deleteUser`, and `refreshData`.
+- Unit tests live under `test/*.spec.js` and exercise user CRUD plus the new timezone helper methods (`setTimezone`, `setUserTimezones`, `setGroupTimezones`).
 - There is an optional end-to-end spec (`test/e2e-user-lifecycle.spec.js`) that drives a create → update → delete cycle against a physical device.  
   It is skipped automatically unless the required environment variables are provided.
 

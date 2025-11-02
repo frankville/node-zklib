@@ -9,7 +9,14 @@ const {
   exportErrorMessage,
   checkNotEventUDP,
   encodeUserInfo72,
-  encodeUserInfo28
+  encodeUserInfo28,
+  encodeTimezoneInfo,
+  decodeTimezoneInfo,
+  encodeUserTimezoneInfo,
+  decodeUserTimezoneInfo,
+  encodeGroupTimezoneInfo,
+  decodeGroupTimezoneInfo,
+  toUInt32
 } = require('./utils')
 
 const { MAX_CHUNK, REQUEST_DATA, COMMANDS } = require('./constants')
@@ -483,6 +490,45 @@ class ZKLibUDP {
     ) ? encodeUserInfo72 : encodeUserInfo28;
     const payload = Buffer.isBuffer(userInfo) ? userInfo : encoder(userInfo);
     return await this.executeCmd(COMMANDS.CMD_USER_WRQ, payload);
+  }
+
+  async getTimezone(index) {
+    const req = Buffer.alloc(4);
+    req.writeUInt32LE(toUInt32(index), 0);
+    const reply = await this.executeCmd(COMMANDS.CMD_TZ_RRQ, req);
+    const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
+    return decodeTimezoneInfo(data);
+  }
+
+  async setTimezone(info = {}) {
+    const payload = Buffer.isBuffer(info) ? info : encodeTimezoneInfo(info);
+    return await this.executeCmd(COMMANDS.CMD_TZ_WRQ, payload);
+  }
+
+  async getUserTimezones(uid) {
+    const req = Buffer.alloc(4);
+    req.writeUInt32LE(toUInt32(uid), 0);
+    const reply = await this.executeCmd(COMMANDS.CMD_USERTZ_RRQ, req);
+    const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
+    return decodeUserTimezoneInfo(data);
+  }
+
+  async setUserTimezones(info = {}) {
+    const payload = Buffer.isBuffer(info) ? info : encodeUserTimezoneInfo(info);
+    return await this.executeCmd(COMMANDS.CMD_USERTZ_WRQ, payload);
+  }
+
+  async getGroupTimezones(group) {
+    const req = Buffer.alloc(8);
+    req.writeUInt8(toUInt32(group) & 0xFF, 0);
+    const reply = await this.executeCmd(COMMANDS.CMD_GRPTZ_RRQ, req);
+    const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
+    return decodeGroupTimezoneInfo(data);
+  }
+
+  async setGroupTimezones(info = {}) {
+    const payload = Buffer.isBuffer(info) ? info : encodeGroupTimezoneInfo(info);
+    return await this.executeCmd(COMMANDS.CMD_GRPTZ_WRQ, payload);
   }
 
   async deleteUser(uid) {

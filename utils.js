@@ -299,6 +299,181 @@ module.exports.encodeUserInfo28 = (options = {}) => {
     return payload;
 };
 
+module.exports.toUInt16 = toUInt16;
+module.exports.toUInt32 = toUInt32;
+
+const clamp = (value, min, max) => {
+    if (value === undefined || value === null || Number.isNaN(Number(value))) {
+        return min;
+    }
+    return Math.min(Math.max(Number(value), min), max);
+};
+
+const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+const normaliseDayKey = (key) => {
+    if (!key) return null;
+    const lower = key.toString().toLowerCase();
+    if (lower.startsWith('sun')) return 'sunday';
+    if (lower.startsWith('mon')) return 'monday';
+    if (lower.startsWith('tue')) return 'tuesday';
+    if (lower.startsWith('wed')) return 'wednesday';
+    if (lower.startsWith('thu')) return 'thursday';
+    if (lower.startsWith('fri')) return 'friday';
+    if (lower.startsWith('sat')) return 'saturday';
+    return null;
+};
+
+const encodeDaySegment = (segment = {}) => {
+    const buffer = Buffer.alloc(4);
+    const startHour = clamp(segment.startHour ?? segment.start_hour ?? 0, 0, 23);
+    const startMinute = clamp(segment.startMinute ?? segment.start_minute ?? 0, 0, 59);
+    const endHour = clamp(segment.endHour ?? segment.end_hour ?? 0, 0, 23);
+    const endMinute = clamp(segment.endMinute ?? segment.end_minute ?? 0, 0, 59);
+    buffer.writeUInt8(startHour, 0);
+    buffer.writeUInt8(startMinute, 1);
+    buffer.writeUInt8(endHour, 2);
+    buffer.writeUInt8(endMinute, 3);
+    return buffer;
+};
+
+module.exports.encodeTimezoneInfo = (options = {}) => {
+    const buffer = Buffer.alloc(32);
+    buffer.fill(0);
+
+    if (options.index === undefined || options.index === null) {
+        throw new Error('encodeTimezoneInfo: index is required');
+    }
+
+    buffer.writeUInt32LE(toUInt32(options.index), 0);
+
+    const schedule = options.days || options.schedule || {};
+    const defaultSegment = options.defaultSegment || options.default || null;
+
+    DAYS.forEach((day, idx) => {
+        let segment = null;
+        if (Array.isArray(schedule)) {
+            segment = schedule[idx] ?? defaultSegment;
+        } else {
+            const normalisedKey = normaliseDayKey(day);
+            segment = schedule[normalisedKey] ??
+                schedule[day] ??
+                schedule[idx] ??
+                defaultSegment;
+        }
+        const dayBuffer = encodeDaySegment(segment || {});
+        dayBuffer.copy(buffer, 4 + (idx * 4));
+    });
+
+    return buffer;
+};
+
+module.exports.decodeTimezoneInfo = (data, fallbackIndex = 0) => {
+    if (!Buffer.isBuffer(data) || data.length === 0) {
+        return {
+            index: fallbackIndex,
+            days: normaliseTimezoneSchedule([], null)
+        };
+    }
+
+    const index = data.length >= 4 ? data.readUInt32LE(0) : data.length >= 2 ? data.readUInt16LE(0) : fallbackIndex;
+    const days = {};
+
+    DAYS.forEach((day, idx) => {
+        const offset = 4 + (idx * 4);
+        if (data.length >= offset + 4) {
+            days[day] = {
+                startHour: data.readUInt8(offset),
+                startMinute: data.readUInt8(offset + 1),
+                endHour: data.readUInt8(offset + 2),
+                endMinute: data.readUInt8(offset + 3)
+            };
+        } else {
+            days[day] = { startHour: 0, startMinute: 0, endHour: 0, endMinute: 0 };
+        }
+    });
+
+    return { index, days };
+};
+
+module.exports.encodeUserTimezoneInfo = (options = {}) => {
+    const buffer = Buffer.alloc(20);
+    buffer.fill(0);
+
+    if (options.uid === undefined || options.uid === null) {
+        throw new Error('encodeUserTimezoneInfo: uid is required');
+    }
+
+    buffer.writeUInt32LE(toUInt32(options.uid), 0);
+
+    const useUserTimezones = options.useUserTimezones !== undefined
+        ? !!options.useUserTimezones
+        : !(options.useGroupTimezones === true);
+
+    buffer.writeUInt32LE(useUserTimezones ? 1 : 0, 4);
+
+    const tzList = (useUserTimezones && Array.isArray(options.timezones)) ? options.timezones : [];
+    for (let i = 0; i < 3; i++) {
+        buffer.writeUInt32LE(toUInt32(tzList[i] ?? 0), 8 + (i * 4));
+    }
+
+    return buffer;
+};
+
+module.exports.decodeUserTimezoneInfo = (data) => {
+    if (!Buffer.isBuffer(data) || data.length < 8) {
+        throw new Error('decodeUserTimezoneInfo: invalid buffer');
+    }
+
+    const flag = data.readUInt16LE(0);
+    const tz1 = data.readUInt16LE(2);
+    const tz2 = data.readUInt16LE(4);
+    const tz3 = data.readUInt16LE(6);
+
+    return {
+        useGroupTimezones: flag === 1,
+        timezones: [tz1, tz2, tz3]
+    };
+};
+
+module.exports.encodeGroupTimezoneInfo = (options = {}) => {
+    const buffer = Buffer.alloc(8);
+    buffer.fill(0);
+
+    if (options.group === undefined || options.group === null) {
+        throw new Error('encodeGroupTimezoneInfo: group is required');
+    }
+
+    buffer.writeUInt8(toUInt16(options.group) & 0xFF, 0);
+    buffer.writeUInt16LE(toUInt16(options.tz1 ?? options.timezones?.[0] ?? 0), 1);
+    buffer.writeUInt16LE(toUInt16(options.tz2 ?? options.timezones?.[1] ?? 0), 3);
+    buffer.writeUInt16LE(toUInt16(options.tz3 ?? options.timezones?.[2] ?? 0), 5);
+
+    const verify = clamp(options.verifyStyle ?? options.verify ?? 0, 0, 0x7F);
+    const holiday = options.holiday ? 0x80 : 0x00;
+    buffer.writeUInt8((verify & 0x7F) | holiday, 7);
+
+    return buffer;
+};
+
+module.exports.decodeGroupTimezoneInfo = (data) => {
+    if (!Buffer.isBuffer(data) || data.length < 8) {
+        throw new Error('decodeGroupTimezoneInfo: invalid buffer');
+    }
+
+    const verifyByte = data.readUInt8(7);
+    return {
+        group: data.readUInt8(0),
+        timezones: [
+            data.readUInt16LE(1),
+            data.readUInt16LE(3),
+            data.readUInt16LE(5)
+        ],
+        verifyStyle: verifyByte & 0x7F,
+        holiday: (verifyByte & 0x80) === 0x80
+    };
+};
+
 module.exports.decodeRecordData40 = (recordData)=>{
     const record = {
         userSn: recordData.readUIntLE(0, 2),

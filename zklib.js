@@ -184,6 +184,48 @@ class ZKLib {
         )
     }
 
+    async getTimezone(index){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getTimezone(index),
+            ()=> this.zklibUdp.getTimezone(index)
+        )
+    }
+
+    async setTimezone(info){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setTimezone(info),
+            ()=> this.zklibUdp.setTimezone(info)
+        )
+    }
+
+    async getUserTimezones(uid){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getUserTimezones(uid),
+            ()=> this.zklibUdp.getUserTimezones(uid)
+        )
+    }
+
+    async setUserTimezones(info){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setUserTimezones(info),
+            ()=> this.zklibUdp.setUserTimezones(info)
+        )
+    }
+
+    async getGroupTimezones(group){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getGroupTimezones(group),
+            ()=> this.zklibUdp.getGroupTimezones(group)
+        )
+    }
+
+    async setGroupTimezones(info){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setGroupTimezones(info),
+            ()=> this.zklibUdp.setGroupTimezones(info)
+        )
+    }
+
     async deleteUser(uid){
         return await this.functionWrapper(
             ()=> this.zklibTcp.deleteUser(uid),
