@@ -26,5 +26,11 @@
   "homepage": "https://github.com/caobo171/node-zklib#readme",
   "dependencies": {
     "node-zklib": "^1.0.0"
+  },
+  "devDependencies": {
+    "chai": "^6.2.0",
+    "foreman": "^3.0.1",
+    "mocha": "^11.7.4",
+    "sinon": "^21.0.0"
   }
 }

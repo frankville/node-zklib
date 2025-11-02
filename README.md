@@ -116,8 +116,6 @@ Each helper wraps the low-level commands (`CMD_TZ_WRQ`, `CMD_TZ_RRQ`, `CMD_USERT
 
 ## Tests
 
-> Note: this copy lives inside `node_modules/` of the main project, so remember to upstream any local edits to your fork if you need them to persist.
-
 - Unit tests live under `test/*.spec.js` and exercise user CRUD plus the new timezone helper methods (`setTimezone`, `setUserTimezones`, `setGroupTimezones`).
 - There is an optional end-to-end spec (`test/e2e-user-lifecycle.spec.js`) that drives a create → update → delete cycle against a physical device.  
   It is skipped automatically unless the required environment variables are provided.
