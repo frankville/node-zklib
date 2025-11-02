@@ -58,4 +58,23 @@ describe('ZKLibTCP user management helpers', () => {
     expect(executeStub.calledOnce).to.equal(true);
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_REFRESHDATA);
   });
+
+  it('reads and writes user group membership', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const readReply = Buffer.alloc(8 + 1);
+    readReply.writeUInt8(4, 8);
+    const executeStub = sinon.stub(zk, 'executeCmd');
+    executeStub.onCall(0).resolves(readReply);
+    executeStub.onCall(1).resolves(Buffer.alloc(0));
+
+    const res = await zk.getUserGroup(15);
+    expect(res.group).to.equal(4);
+    expect(executeStub.getCall(0).args[0]).to.equal(COMMANDS.CMD_USERGRP_RRQ);
+    expect(executeStub.getCall(0).args[1].readUInt32LE(0)).to.equal(15);
+
+    await zk.setUserGroup({ uid: 15, group: 6 });
+    expect(executeStub.getCall(1).args[0]).to.equal(COMMANDS.CMD_USERGRP_WRQ);
+    expect(executeStub.getCall(1).args[1].readUInt8(0)).to.equal(15 & 0xFF);
+    expect(executeStub.getCall(1).args[1].readUInt8(4)).to.equal(6);
+  });
 });

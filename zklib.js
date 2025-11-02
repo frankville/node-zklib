@@ -226,6 +226,20 @@ class ZKLib {
         )
     }
 
+    async getUserGroup(uid){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getUserGroup(uid),
+            ()=> this.zklibUdp.getUserGroup(uid)
+        )
+    }
+
+    async setUserGroup(info){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setUserGroup(info),
+            ()=> this.zklibUdp.setUserGroup(info)
+        )
+    }
+
     async deleteUser(uid){
         return await this.functionWrapper(
             ()=> this.zklibTcp.deleteUser(uid),

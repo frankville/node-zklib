@@ -8,7 +8,9 @@ const {
   encodeUserTimezoneInfo,
   decodeUserTimezoneInfo,
   encodeGroupTimezoneInfo,
-  decodeGroupTimezoneInfo
+  decodeGroupTimezoneInfo,
+  encodeUserGroupInfo,
+  decodeUserGroupInfo
 } = require('../utils');
 
 describe('Timezone encoding helpers', () => {
@@ -89,5 +91,15 @@ describe('Timezone encoding helpers', () => {
     expect(decoded.timezones).to.deep.equal([3, 4, 0]);
     expect(decoded.verifyStyle).to.equal(6);
     expect(decoded.holiday).to.equal(true);
+  });
+
+  it('encodes user group info', () => {
+    const buffer = encodeUserGroupInfo({ uid: 10, group: 7 });
+    expect(buffer.length).to.equal(5);
+    expect(buffer.readUInt8(0)).to.equal(10);
+    expect(buffer.readUInt8(4)).to.equal(7);
+
+    const decoded = decodeUserGroupInfo(Buffer.from([7]));
+    expect(decoded.group).to.equal(7);
   });
 });

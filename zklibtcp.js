@@ -15,7 +15,9 @@ const { createTCPHeader,
   decodeUserTimezoneInfo,
   encodeGroupTimezoneInfo,
   decodeGroupTimezoneInfo,
-  toUInt32 } = require('./utils')
+  toUInt32,
+  encodeUserGroupInfo,
+  decodeUserGroupInfo } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
 
@@ -533,6 +535,19 @@ class ZKLibTCP {
   async setGroupTimezones(info = {}) {
     const payload = Buffer.isBuffer(info) ? info : encodeGroupTimezoneInfo(info);
     return await this.executeCmd(COMMANDS.CMD_GRPTZ_WRQ, payload);
+  }
+
+  async getUserGroup(uid) {
+    const req = Buffer.alloc(4);
+    req.writeUInt32LE(toUInt32(uid), 0);
+    const reply = await this.executeCmd(COMMANDS.CMD_USERGRP_RRQ, req);
+    const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
+    return decodeUserGroupInfo(data);
+  }
+
+  async setUserGroup(info = {}) {
+    const payload = Buffer.isBuffer(info) ? info : encodeUserGroupInfo(info);
+    return await this.executeCmd(COMMANDS.CMD_USERGRP_WRQ, payload);
   }
 
   async deleteUser(uid) {

@@ -396,6 +396,29 @@ module.exports.decodeTimezoneInfo = (data, fallbackIndex = 0) => {
     return { index, days };
 };
 
+module.exports.encodeUserGroupInfo = (options = {}) => {
+    const buffer = Buffer.alloc(5);
+    buffer.fill(0);
+
+    if (options.uid === undefined || options.uid === null) {
+        throw new Error('encodeUserGroupInfo: uid is required');
+    }
+
+    buffer.writeUInt8(toUInt16(options.uid) & 0xFF, 0);
+    buffer.writeUInt8(toUInt16(options.group ?? options.groupNumber ?? 1) & 0xFF, 4);
+
+    return buffer;
+};
+
+module.exports.decodeUserGroupInfo = (data) => {
+    if (!Buffer.isBuffer(data) || data.length === 0) {
+        return { group: 1 };
+    }
+
+    const group = data.length >= 1 ? data.readUInt8(0) : 1;
+    return { group };
+};
+
 module.exports.encodeUserTimezoneInfo = (options = {}) => {
     const buffer = Buffer.alloc(20);
     buffer.fill(0);

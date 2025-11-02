@@ -110,6 +110,9 @@ const tz = await zkInstance.getTimezone(5); // => { index, days }
 
 await zkInstance.setUserTimezones({ uid: 123, timezones: [5], useUserTimezones: true });
 await zkInstance.setGroupTimezones({ group: 2, timezones: [5, 0, 0], verifyStyle: 0 });
+
+await zkInstance.setUserGroup({ uid: 123, group: 2 });
+const groupInfo = await zkInstance.getUserGroup(123);
 ```
 
 Each helper wraps the low-level commands (`CMD_TZ_WRQ`, `CMD_TZ_RRQ`, `CMD_USERTZ_WRQ`, `CMD_GRPTZ_WRQ`), handling byte encoding for you. Use `getUserTimezones` / `getGroupTimezones` to inspect current assignments.
