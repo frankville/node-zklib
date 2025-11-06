@@ -1,5 +1,7 @@
 # node-zklib
 
+> For contributors and coding agents: please read `AGENTS.md` in this folder for a concise overview of transports, encoders/decoders, realtime events, testing, and integration expectations when working on this fork.
+
 
 
 this is a fork that is intended to read real time attendance events from this device:
@@ -79,7 +81,7 @@ test()
 
 - There are many function you can do just visit zk protocol to see the command and put it in executeCmd function already exist in the ZKLIB 
 
-- [This repo contain the cmd of many machine ] (https://github.com/adrobinoga/zk-protocol/blob/master/protocol.md)
+- Protocol reference: https://github.com/adrobinoga/zk-protocol/blob/master/protocol.md
 
 ```javascript
     async executeCmd(command, data=''){
@@ -116,6 +118,41 @@ const groupInfo = await zkInstance.getUserGroup(123);
 ```
 
 Each helper wraps the low-level commands (`CMD_TZ_WRQ`, `CMD_TZ_RRQ`, `CMD_USERTZ_WRQ`, `CMD_GRPTZ_WRQ`), handling byte encoding for you. Use `getUserTimezones` / `getGroupTimezones` to inspect current assignments.
+
+## Protocol Mapping
+
+The high‑level API maps to zk‑protocol commands as follows:
+
+| Method | Command(s) | Notes |
+| --- | --- | --- |
+| `getInfo()` | `CMD_GET_FREE_SIZES` | Returns user/log counts and capacities. |
+| `getUsers()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_USERS` | Streams user records; decoder handles 28B (UDP) or 72B (TCP). |
+| `setUser(info)` | `CMD_USER_WRQ` | Uses `encodeUserInfo28` (UDP) or `encodeUserInfo72` (SSR/TCP) based on payload. |
+| `deleteUser(uid)` | `CMD_DELETE_USER` | 16‑bit uid. |
+| `getAttendances()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS` | Streams attendance logs (16B/40B variants). |
+| `clearAttendanceLog()` | `CMD_CLEAR_ATTLOG` | Clears stored logs. |
+| `openDoor()` | `CMD_UNLOCK` | Uses device door‑open delay. |
+| `enableDevice()` | `CMD_ENABLEDEVICE` |  |
+| `disableDevice()` | `CMD_DISABLEDEVICE` |  |
+| `refreshData()` | `CMD_REFRESHDATA` | Recommended after writes. |
+| `getTimezone(index)` | `CMD_TZ_RRQ` | Decoder handles 2‑byte+footer and 4‑byte index formats. |
+| `setTimezone(info)` | `CMD_TZ_WRQ` | `encodeTimezoneInfo` packs 7×(start,end) day segments. |
+| `getUserTimezones(uid)` | `CMD_USERTZ_RRQ` | Returns `{ useGroupTimezones, timezones:[tz1,tz2,tz3] }`. |
+| `setUserTimezones(info)` | `CMD_USERTZ_WRQ` | 3 fixed slots; `flag=1` to use user TZ, `0` group TZ. |
+| `getGroupTimezones(group)` | `CMD_GRPTZ_RRQ` | Returns `{ group, timezones, verifyStyle, holiday }`. |
+| `setGroupTimezones(info)` | `CMD_GRPTZ_WRQ` | 3 fixed slots; `verifyStyle` + holiday bit. |
+| `getUserGroup(uid)` | `CMD_USERGRP_RRQ` | Reads the user’s group (1–100). |
+| `setUserGroup(info)` | `CMD_USERGRP_WRQ` | Writes user→group membership. |
+| `getRealTimeLogs(cb)` | `CMD_REG_EVENT` | Emits realtime frames; see EF_* flags below. |
+
+Event flags used in realtime:
+- `EF_ATTLOG` (1): attendance/log event.
+- `EF_VERIFY` (128): verify events (biometric/card; failures often appear here).
+- `EF_ALARM` (512): alarms (e.g., misoperation/illegal verify if enabled in device settings).
+
+Timezone notes:
+- Devices have fixed 3 timezone slots per user/group; unused slots must be zero. Some firmwares return values like `256` for tz `1` (endianness quirk) — callers may normalize.
+- Closed days may read back as 23→0 on some models; treat as “no access”.
 
 ## Tests
 
