@@ -108,6 +108,14 @@ Debugging Tips
   - If `group-get` returns `group:0`, assign a user to that group and try again.
   - Some firmwares return tz values as 256×index; normalize in callers if needed.
 
+Branching policy (agents)
+- Before editing, check: `git status -sb`.
+- If you're on `main` or `master`, **do not edit files**. Create a branch first.
+- Branch naming convention:
+  - `fix/<short-slug>` for fixes
+  - `feat/<short-slug>` for features
+  - `chore/<short-slug>` for maintenance/docs/refactors
+
 Contribution Guidelines (for Agents)
 - Keep the public API surface stable; prefer adding methods over breaking changes.
 - For new protocol commands:
