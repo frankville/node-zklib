@@ -17,15 +17,17 @@ const { createTCPHeader,
   decodeGroupTimezoneInfo,
   toUInt32,
   encodeUserGroupInfo,
-  decodeUserGroupInfo } = require('./utils')
+  decodeUserGroupInfo,
+  makeCommKey } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
 
 class ZKLibTCP {
-  constructor(ip, port, timeout) {
+  constructor(ip, port, timeout, comm_code = 0) {
     this.ip = ip
     this.port = port
     this.timeout = timeout
+    this.comm_code = comm_code
     this.sessionId = null
     this.replyId = 0
     this.socket = null;
@@ -65,13 +67,23 @@ class ZKLibTCP {
   connect() {
     return new Promise(async (resolve, reject) => {
       try {
-        const reply = await this.executeCmd(COMMANDS.CMD_CONNECT, '')
-        if (reply) {
-          resolve(true)
-        } else {
+        let reply = await this.executeCmd(COMMANDS.CMD_CONNECT, '')
 
-          reject(new Error('NO_REPLY_ON_CMD_CONNECT'))
+        if (reply.readUInt16LE(0) === COMMANDS.CMD_ACK_OK) {
+          return resolve(true)
         }
+
+        if (reply.readUInt16LE(0) === COMMANDS.CMD_ACK_UNAUTH) {
+          const hashedCommKey = makeCommKey(this.comm_code, this.sessionId)
+          reply = await this.executeCmd(COMMANDS.CMD_AUTH, hashedCommKey)
+          if (reply.readUInt16LE(0) === COMMANDS.CMD_ACK_OK) {
+            return resolve(true)
+          } else {
+            return reject(new Error('AUTH_FAILED: 0x' + reply.readUInt16LE(0).toString(16)))
+          }
+        }
+
+        reject(new Error('NO_REPLY_ON_CMD_CONNECT'))
       } catch (err) {
         reject(err)
       }

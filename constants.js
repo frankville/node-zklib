@@ -97,6 +97,11 @@ module.exports.USHRT_MAX = 65535
 
 module.exports.MAX_CHUNK = 65472
 
+module.exports.AUTH = {
+    COMM_KEY_TICKS: 50,
+    COMM_KEY_XOR: ['Z', 'K', 'S', 'O'],
+}
+
 module.exports.REQUEST_DATA = {
     DISABLE_DEVICE :  Buffer.from([0,0,0,0]),
     GET_REAL_TIME_EVENT: Buffer.from([0xff,0xff,0x00, 0x00]),

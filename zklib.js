@@ -4,11 +4,11 @@ const ZKLibUDP = require('./zklibudp')
 const { ZKError , ERROR_TYPES } = require('./zkerror')
 
 class ZKLib {
-    constructor(ip, port, timeout ,connType, inport){
+    constructor(ip, port, timeout, connType, inport, comm_code = 0){
         this.connectionType = connType;
 
-        this.zklibTcp = new ZKLibTCP(ip,port,timeout) 
-        this.zklibUdp = new ZKLibUDP(ip,port,timeout , inport) 
+        this.zklibTcp = new ZKLibTCP(ip, port, timeout, comm_code)
+        this.zklibUdp = new ZKLibUDP(ip,port,timeout , inport)
         this.interval = null 
         this.timer = null
         this.isBusy = false
