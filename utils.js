@@ -1,4 +1,4 @@
-const { USHRT_MAX , COMMANDS } = require('./constants')
+const { USHRT_MAX , COMMANDS, AUTH } = require('./constants')
 const { log } = require('./helpers/errorLog')
 
 
@@ -694,4 +694,37 @@ module.exports.checkNotEventTCP = (data)=> {
 module.exports.checkNotEventUDP = (data)=>{
   const commandId = this.decodeUDPHeader(data.subarray(0,8)).commandId
   return commandId === COMMANDS.CMD_REG_EVENT
+}
+
+module.exports.makeCommKey = (key, sessionId, ticks = AUTH.COMM_KEY_TICKS) => {
+  key = Math.floor(key);
+  sessionId = Math.floor(sessionId);
+
+  let k = 0;
+  for (let i = 0; i < 32; i++) {
+    if (key & (1 << i)) {
+      k = (k << 1) | 1;
+    } else {
+      k = k << 1;
+    }
+  }
+  k += sessionId;
+
+  const buffer = new ArrayBuffer(4);
+  const view = new DataView(buffer);
+  view.setUint32(0, k, true);
+  let bytes = new Uint8Array(buffer);
+
+  const xorKey = AUTH.COMM_KEY_XOR.map(c => c.charCodeAt(0));
+  bytes = bytes.map((b, i) => b ^ xorKey[i]);
+
+  const swapped = new Uint8Array([bytes[2], bytes[3], bytes[0], bytes[1]]);
+
+  const B = ticks & 0xff;
+  return Buffer.from([
+    swapped[0] ^ B,
+    swapped[1] ^ B,
+    B,
+    swapped[3] ^ B,
+  ]);
 }
