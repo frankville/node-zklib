@@ -30,6 +30,7 @@ class ZKLibTCP {
     this.replyId = 0
     this.socket = null;
     this.openDoorDelaySec = 3;
+    this._rtBuffer = Buffer.alloc(0);
   }
 
 
@@ -80,6 +81,7 @@ class ZKLibTCP {
 
   closeSocket() {
     return new Promise((resolve, reject) => {
+      this._rtBuffer = Buffer.alloc(0);
       this.socket.removeAllListeners('data')
       this.socket.end(() => {
         clearTimeout(timer)
@@ -571,19 +573,40 @@ class ZKLibTCP {
 
   async getRealTimeLogs(cb = () => { }) {
     this.replyId++;
+    this._rtBuffer = Buffer.alloc(0);
 
     const buf = createTCPHeader(COMMANDS.CMD_REG_EVENT, this.sessionId, this.replyId, Buffer.from([0x01, 0x00, 0x00, 0x00]))
 
     this.socket.write(buf, null, err => {
     })
 
+    const TCP_MAGIC = Buffer.from([0x50, 0x50, 0x82, 0x7d]);
+    // Minimum bytes needed: 8 (TCP prefix) + 8 (ZK inner header) + 26 (fields before timestamp) + 6 (timestamp) = 48
+    const MIN_REALTIME_PACKET = 48;
+
     this.socket.listenerCount('data') === 0 && this.socket.on('data', (data) => {
+      this._rtBuffer = Buffer.concat([this._rtBuffer, data]);
 
-      if (!checkNotEventTCP(data)) return;
-      if (data.length > 16) {
-        cb(decodeRecordRealTimeLog52(data))
+      while (this._rtBuffer.length >= 8) {
+        if (this._rtBuffer.compare(TCP_MAGIC, 0, 4, 0, 4) !== 0) {
+          // Lost sync on the stream, discard everything
+          this._rtBuffer = Buffer.alloc(0);
+          break;
+        }
+
+        const payloadLength = this._rtBuffer.readUIntLE(4, 2);
+        const totalLength = 8 + payloadLength;
+
+        if (this._rtBuffer.length < totalLength) break; // incomplete packet, wait for more data
+
+        const message = this._rtBuffer.slice(0, totalLength);
+        this._rtBuffer = this._rtBuffer.slice(totalLength);
+
+        if (!checkNotEventTCP(message)) continue;
+        if (message.length >= MIN_REALTIME_PACKET) {
+          cb(decodeRecordRealTimeLog52(message));
+        }
       }
-
     })
 
   }
