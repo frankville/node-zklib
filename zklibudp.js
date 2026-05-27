@@ -1,4 +1,5 @@
 const dgram = require('dgram')
+const { createLogger } = require('./helpers/logger')
 const {
   createUDPHeader,
   decodeUserData28,
@@ -27,7 +28,7 @@ const { MAX_CHUNK, REQUEST_DATA, COMMANDS } = require('./constants')
 const { log } = require('./helpers/errorLog')
 
 class ZKLibUDP {
-  constructor(ip, port, timeout, inport) {
+  constructor(ip, port, timeout, inport, options = {}) {
     this.ip = ip
     this.port = port
     this.timeout = timeout
@@ -35,12 +36,25 @@ class ZKLibUDP {
     this.sessionId = null
     this.replyId = 0
     this.inport = inport
-    this.logger = null;
     this.keepAlive = false;
     this.keepAliveTO = 10000;
     this.openDoorDelaySec = 3;
     this.timeoutCounter = 0;
+    this.logger = options.logger || createLogger({
+      namespace: 'node-zklib:udp',
+      baseMeta: { ip: this.ip, port: this.port, inport: this.inport, transport: 'udp' },
+    })
     
+  }
+
+  setLogLevel(level) {
+    this.logger.setLevel(level)
+    return this
+  }
+
+  setLogger(logger) {
+    this.logger.setLogger(logger)
+    return this
   }
 
   createSocket(cbError, cbClose) {
@@ -48,16 +62,19 @@ class ZKLibUDP {
       this.socket = dgram.createSocket('udp4');
       this.socket.setMaxListeners(Infinity)
       this.socket.once('error', err => {
+        this.logger.error('socket error', { error: err && err.message ? err.message : err })
         reject(err)
         cbError && cbError(err)
       })
 
       this.socket.on('close', (err) => {
+        this.logger.info('socket closed', { hadError: !!err })
         this.socket = null;
         cbClose && cbClose('udp')
       })
 
       this.socket.once('listening', () => {
+        this.logger.info('socket listening', { ip: this.ip, port: this.port, inport: this.inport, timeout: this.timeout })
         resolve(this.socket)
       })
       try {
@@ -72,13 +89,17 @@ class ZKLibUDP {
   connect() {
     return new Promise(async (resolve, reject) => {
       try {
+        this.logger.debug('sending connect command')
         const reply = await this.executeCmd(COMMANDS.CMD_CONNECT, '')
         if (reply) {
+          this.logger.info('connect acknowledged', { sessionId: this.sessionId })
           resolve(true)
         } else {
+          this.logger.error('no valid connect reply')
           reject(new Error('NO_REPLY_ON_CMD_CONNECT'))
         }
       } catch (err) {
+        this.logger.error('connect command failed', { error: err && err.message ? err.message : err })
         reject(err)
       }
     })
@@ -107,12 +128,15 @@ class ZKLibUDP {
     return new Promise((resolve, reject) => {
       let sendTimeoutId;
       this.socket.once('message', (data) => {
+        this.logger.trace('socket message received for writeMessage', this.logger.formatBuffer(data))
         sendTimeoutId && clearTimeout(sendTimeoutId)
         resolve(data)
       })
 
+      this.logger.trace('socket send', this.logger.formatBuffer(msg))
       this.socket.send(msg, 0, msg.length, this.port, this.ip, (err) => {
         if (err) {
+          this.logger.error('socket send failed', { error: err && err.message ? err.message : err })
           reject(err)
         }
         if (this.timeout) {
@@ -135,7 +159,11 @@ class ZKLibUDP {
       }
 
       const handleOnData = (data) => {
-        if (checkNotEventUDP(data)) return;
+        this.logger.trace('request data message received', this.logger.formatBuffer(data))
+        if (checkNotEventUDP(data)) {
+          this.logger.debug('request data ignored realtime event')
+          return;
+        }
         clearTimeout(sendTimeoutId)
         sendTimeoutId = setTimeout(() => {
           reject(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'))
@@ -151,6 +179,7 @@ class ZKLibUDP {
 
       this.socket.send(msg, 0, msg.length, this.port, this.ip, (err) => {
         if (err) {
+          this.logger.error('request data send failed', { error: err && err.message ? err.message : err })
           reject(err)
         }
         sendTimeoutId = setTimeout(() => {
@@ -182,15 +211,37 @@ class ZKLibUDP {
 
 
         const buf = createUDPHeader(command, this.sessionId, this.replyId, data)
+        this.logger.debug('execute command', {
+          command: exportErrorMessage(command),
+          commandId: command,
+          sessionId: this.sessionId,
+          replyId: this.replyId,
+          payloadLength: Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data || '')),
+        })
+        this.logger.trace('execute command packet', this.logger.formatBuffer(buf))
         const reply = await this.writeMessage(buf, command === COMMANDS.CMD_CONNECT || command === COMMANDS.CMD_EXIT)
+        this.logger.trace('execute command reply packet', this.logger.formatBuffer(reply))
 
         if (reply && reply.length && reply.length >= 0) {
+          const replyCommand = reply.readUInt16LE(0)
+          this.logger.debug('execute command reply', {
+            command: exportErrorMessage(replyCommand),
+            commandId: replyCommand,
+            sessionId: reply.readUInt16LE(4),
+            replyId: reply.readUInt16LE(6),
+            payloadLength: reply.length,
+          })
           if (command === COMMANDS.CMD_CONNECT) {
             this.sessionId = reply.readUInt16LE(4);
           }
         }
         resolve(reply)
       } catch (err) {
+        this.logger.error('execute command failed', {
+          command: exportErrorMessage(command),
+          commandId: command,
+          error: err && err.message ? err.message : err,
+        })
         reject(err)
       }
     })
@@ -207,6 +258,7 @@ class ZKLibUDP {
     this.socket.send(buf, 0, buf.length, this.port, this.ip, (err) => {
       if (err) {
         if (err) {
+          this.logger.error('send chunk request failed', { error: err && err.message ? err.message : err })
           log(`[UDP][SEND_CHUNK_REQUEST]` + err.toString())
         }
       }
@@ -599,8 +651,15 @@ class ZKLibUDP {
     this.replyId++;
     
     const buf = createUDPHeader(COMMANDS.CMD_REG_EVENT, this.sessionId, this.replyId, REQUEST_DATA.GET_REAL_TIME_EVENT)
+    this.logger.info('registering realtime events', { flags: 'GET_REAL_TIME_EVENT', replyId: this.replyId })
+    this.logger.trace('realtime register packet', this.logger.formatBuffer(buf))
 
     this.socket.send(buf, 0, buf.length, this.port, this.ip, (err) => {
+      if (err) {
+        this.logger.error('realtime register send failed', { error: err && err.message ? err.message : err })
+      } else {
+        this.logger.debug('realtime register sent')
+      }
       // if(err){
       //   console.log("error en send packet to socket...");
       //   console.log(err);
@@ -609,14 +668,24 @@ class ZKLibUDP {
     });
 
     this.socket.on('message', (data) => {
+      this.logger.trace('realtime raw message', this.logger.formatBuffer(data))
 
-      if (!checkNotEventUDP(data)) return;
+      if (!checkNotEventUDP(data)) {
+        this.logger.debug('realtime message filtered')
+        return;
+      }
 
       //console.log((new Date()).toLocaleString()+" -- "+"el mensaje UDP que viene "+data.toString("hex").match(/(..?)/g).join(" "))
 
 
 
-      cb(decodeRealTimeEvent(data));
+      try {
+        const event = decodeRealTimeEvent(data)
+        this.logger.debug('realtime event parsed', event)
+        cb(event);
+      } catch (err) {
+        this.logger.error('realtime event decode failed', { error: err && err.message ? err.message : err })
+      }
       
 
       // if (data.length === 18) {

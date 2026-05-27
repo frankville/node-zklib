@@ -2,13 +2,30 @@ const ZKLibTCP = require('./zklibtcp')
 const ZKLibUDP = require('./zklibudp')
 
 const { ZKError , ERROR_TYPES } = require('./zkerror')
+const { createLogger } = require('./helpers/logger')
 
 class ZKLib {
-    constructor(ip, port, timeout, connType, inport, comm_code = 0){
-        this.connectionType = connType;
+    constructor(ip, port, timeout, connType, inport, comm_code = 0, options = {}){
+        if (comm_code && typeof comm_code === 'object' && !Buffer.isBuffer(comm_code)) {
+            options = comm_code
+            comm_code = 0
+        }
 
-        this.zklibTcp = new ZKLibTCP(ip, port, timeout, comm_code)
-        this.zklibUdp = new ZKLibUDP(ip,port,timeout , inport)
+        this.connectionType = connType;
+        this.logger = createLogger({
+            level: options.logLevel,
+            logger: options.logger,
+            namespace: 'node-zklib',
+            maxBytes: options.logMaxBytes,
+            baseMeta: { ip },
+        })
+
+        this.zklibTcp = new ZKLibTCP(ip, port, timeout, comm_code, {
+            logger: this.logger.child('tcp', { port, transport: 'tcp' })
+        })
+        this.zklibUdp = new ZKLibUDP(ip,port,timeout , inport, {
+            logger: this.logger.child('udp', { port, inport, transport: 'udp' })
+        })
         this.interval = null 
         this.timer = null
         this.isBusy = false
@@ -16,6 +33,20 @@ class ZKLib {
         this.keepAlive = false;
         this.keepAliveTO = 10000;
         this.openDoorDelaySec = 3;
+    }
+
+    setLogLevel(level){
+        this.logger.setLevel(level)
+        this.zklibTcp.setLogLevel(level)
+        this.zklibUdp.setLogLevel(level)
+        return this
+    }
+
+    setLogger(logger){
+        this.logger.setLogger(logger)
+        this.zklibTcp.setLogger(logger)
+        this.zklibUdp.setLogger(logger)
+        return this
     }
 
     async functionWrapper (tcpCallback, udpCallback , command ){
@@ -86,6 +117,7 @@ class ZKLib {
             if(this.connectionType === 'tcp'){
 
                 try{
+                    this.logger.info('creating tcp socket', { ip: this.ip })
 
                     if(!this.zklibTcp.socket){
                         try{
@@ -108,6 +140,7 @@ class ZKLib {
                     return true;
 
                 }catch(err){
+                    this.logger.error('tcp connect failed', { error: err && err.message ? err.message : err })
                     try{
                         await this.zklibTcp.disconnect()
                     }catch(err){}
@@ -121,6 +154,7 @@ class ZKLib {
             }else{
 
                 try {
+                    this.logger.info('creating udp socket', { ip: this.ip })
 
                     if(!this.zklibUdp.socket){
                         await this.zklibUdp.createSocket(cbErr, cbClose)
