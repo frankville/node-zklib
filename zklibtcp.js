@@ -1,5 +1,6 @@
 const net = require('net')
 const { MAX_CHUNK, COMMANDS, REQUEST_DATA } = require('./constants')
+const { createLogger } = require('./helpers/logger')
 const { createTCPHeader,
   exportErrorMessage,
   removeTcpHeader,
@@ -23,7 +24,12 @@ const { createTCPHeader,
 const { log } = require('./helpers/errorLog')
 
 class ZKLibTCP {
-  constructor(ip, port, timeout, comm_code = 0) {
+  constructor(ip, port, timeout, comm_code = 0, options = {}) {
+    if (comm_code && typeof comm_code === 'object' && !Buffer.isBuffer(comm_code)) {
+      options = comm_code
+      comm_code = 0
+    }
+
     this.ip = ip
     this.port = port
     this.timeout = timeout
@@ -33,6 +39,20 @@ class ZKLibTCP {
     this.socket = null;
     this.openDoorDelaySec = 3;
     this._rtBuffer = Buffer.alloc(0);
+    this.logger = options.logger || createLogger({
+      namespace: 'node-zklib:tcp',
+      baseMeta: { ip: this.ip, port: this.port, transport: 'tcp' },
+    })
+  }
+
+  setLogLevel(level) {
+    this.logger.setLevel(level)
+    return this
+  }
+
+  setLogger(logger) {
+    this.logger.setLogger(logger)
+    return this
   }
 
 
@@ -41,15 +61,18 @@ class ZKLibTCP {
       this.socket = new net.Socket()
 
       this.socket.once('error', err => {
+        this.logger.error('socket error', { error: err && err.message ? err.message : err })
         reject(err)
         cbError && cbError(err)
       })
 
       this.socket.once('connect', () => {
+        this.logger.info('socket connected', { ip: this.ip, port: this.port, timeout: this.timeout })
         resolve(this.socket)
       })
 
       this.socket.once('close', (err) => {
+        this.logger.info('socket closed', { hadError: !!err })
         this.socket = null;
         cbClose && cbClose('tcp')
       })
@@ -67,24 +90,40 @@ class ZKLibTCP {
   connect() {
     return new Promise(async (resolve, reject) => {
       try {
+        this.logger.debug('sending connect command')
         let reply = await this.executeCmd(COMMANDS.CMD_CONNECT, '')
+        this.logger.debug('connect reply received', {
+          command: exportErrorMessage(reply.readUInt16LE(0)),
+          commandId: reply.readUInt16LE(0),
+        })
 
         if (reply.readUInt16LE(0) === COMMANDS.CMD_ACK_OK) {
+          this.logger.info('connect acknowledged', { sessionId: this.sessionId })
           return resolve(true)
         }
 
         if (reply.readUInt16LE(0) === COMMANDS.CMD_ACK_UNAUTH) {
+          this.logger.info('auth required', { sessionId: this.sessionId })
           const hashedCommKey = makeCommKey(this.comm_code, this.sessionId)
+          this.logger.trace('auth key generated', this.logger.formatBuffer(hashedCommKey))
           reply = await this.executeCmd(COMMANDS.CMD_AUTH, hashedCommKey)
+          this.logger.debug('auth reply received', {
+            command: exportErrorMessage(reply.readUInt16LE(0)),
+            commandId: reply.readUInt16LE(0),
+          })
           if (reply.readUInt16LE(0) === COMMANDS.CMD_ACK_OK) {
+            this.logger.info('auth acknowledged', { sessionId: this.sessionId })
             return resolve(true)
           } else {
+            this.logger.error('auth failed', { commandId: reply.readUInt16LE(0) })
             return reject(new Error('AUTH_FAILED: 0x' + reply.readUInt16LE(0).toString(16)))
           }
         }
 
+        this.logger.error('no valid connect reply')
         reject(new Error('NO_REPLY_ON_CMD_CONNECT'))
       } catch (err) {
+        this.logger.error('connect command failed', { error: err && err.message ? err.message : err })
         reject(err)
       }
     })
@@ -114,12 +153,15 @@ class ZKLibTCP {
 
       let timer = null
       this.socket.once('data', (data) => {
+        this.logger.trace('socket data received for writeMessage', this.logger.formatBuffer(data))
         timer && clearTimeout(timer)
         resolve(data)
       })
 
+      this.logger.trace('socket write', this.logger.formatBuffer(msg))
       this.socket.write(msg, null, async (err) => {
         if (err) {
+          this.logger.error('socket write failed', { error: err && err.message ? err.message : err })
           reject(err)
         } else if (this.timeout) {
           timer = await setTimeout(() => {
@@ -142,10 +184,19 @@ class ZKLibTCP {
       }
 
       const handleOnData = (data) => {
+        this.logger.trace('request data chunk received', this.logger.formatBuffer(data))
         replyBuffer = Buffer.concat([replyBuffer, data])
-        if (checkNotEventTCP(data)) return;
+        if (checkNotEventTCP(data)) {
+          this.logger.debug('request data ignored realtime event')
+          return;
+        }
         clearTimeout(timer)   
         const header = decodeTCPHeader(replyBuffer.subarray(0,16));
+        this.logger.debug('request data header', {
+          command: exportErrorMessage(header.commandId),
+          commandId: header.commandId,
+          payloadSize: header.payloadSize,
+        })
 
         if(header.commandId === COMMANDS.CMD_DATA){
           timer = setTimeout(()=>{
@@ -169,6 +220,7 @@ class ZKLibTCP {
 
       this.socket.write(msg, null, err => {
         if (err) {
+          this.logger.error('request data write failed', { error: err && err.message ? err.message : err })
           reject(err)
         }
 
@@ -201,12 +253,31 @@ class ZKLibTCP {
         this.replyId++
       }
       const buf = createTCPHeader(command, this.sessionId, this.replyId, data)
+      this.logger.debug('execute command', {
+        command: exportErrorMessage(command),
+        commandId: command,
+        sessionId: this.sessionId,
+        replyId: this.replyId,
+        payloadLength: Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data || '')),
+      })
+      this.logger.trace('execute command packet', this.logger.formatBuffer(buf))
       let reply = null
 
       try{
         reply = await this.writeMessage(buf, command === COMMANDS.CMD_CONNECT || command === COMMANDS.CMD_EXIT)
+        this.logger.trace('execute command reply packet', this.logger.formatBuffer(reply))
 
         const rReply = removeTcpHeader(reply);
+        if (rReply && rReply.length >= 8) {
+          const replyCommand = rReply.readUInt16LE(0)
+          this.logger.debug('execute command reply', {
+            command: exportErrorMessage(replyCommand),
+            commandId: replyCommand,
+            sessionId: rReply.readUInt16LE(4),
+            replyId: rReply.readUInt16LE(6),
+            payloadLength: rReply.length,
+          })
+        }
         if (rReply && rReply.length && rReply.length >= 0) {
           if (command === COMMANDS.CMD_CONNECT) {
             this.sessionId = rReply.readUInt16LE(4);
@@ -214,6 +285,11 @@ class ZKLibTCP {
         }
         resolve(rReply)
       }catch(err){
+        this.logger.error('execute command failed', {
+          command: exportErrorMessage(command),
+          commandId: command,
+          error: err && err.message ? err.message : err,
+        })
         reject(err)
       }
     })
@@ -228,6 +304,7 @@ class ZKLibTCP {
 
     this.socket.write(buf, null, err => {
       if (err) {
+        this.logger.error('send chunk request failed', { error: err && err.message ? err.message : err })
         log(`[TCP][SEND_CHUNK_REQUEST]` + err.toString())
       }
     })
@@ -588,8 +665,15 @@ class ZKLibTCP {
     this._rtBuffer = Buffer.alloc(0);
 
     const buf = createTCPHeader(COMMANDS.CMD_REG_EVENT, this.sessionId, this.replyId, Buffer.from([0x01, 0x00, 0x00, 0x00]))
+    this.logger.info('registering realtime events', { flags: 'EF_ATTLOG', replyId: this.replyId })
+    this.logger.trace('realtime register packet', this.logger.formatBuffer(buf))
 
     this.socket.write(buf, null, err => {
+      if (err) {
+        this.logger.error('realtime register write failed', { error: err && err.message ? err.message : err })
+      } else {
+        this.logger.debug('realtime register sent')
+      }
     })
 
     const TCP_MAGIC = Buffer.from([0x50, 0x50, 0x82, 0x7d]);
@@ -597,26 +681,52 @@ class ZKLibTCP {
     const MIN_REALTIME_PACKET = 48;
 
     this.socket.listenerCount('data') === 0 && this.socket.on('data', (data) => {
+      this.logger.trace('realtime raw chunk', this.logger.formatBuffer(data))
       this._rtBuffer = Buffer.concat([this._rtBuffer, data]);
+      this.logger.debug('realtime buffer updated', { bufferLength: this._rtBuffer.length })
 
       while (this._rtBuffer.length >= 8) {
         if (this._rtBuffer.compare(TCP_MAGIC, 0, 4, 0, 4) !== 0) {
           // Lost sync on the stream, discard everything
+          this.logger.warn('realtime stream lost sync, discarding buffer', this.logger.formatBuffer(this._rtBuffer))
           this._rtBuffer = Buffer.alloc(0);
           break;
         }
 
         const payloadLength = this._rtBuffer.readUIntLE(4, 2);
         const totalLength = 8 + payloadLength;
+        this.logger.debug('realtime frame header', { payloadLength, totalLength, bufferLength: this._rtBuffer.length })
 
         if (this._rtBuffer.length < totalLength) break; // incomplete packet, wait for more data
 
         const message = this._rtBuffer.slice(0, totalLength);
         this._rtBuffer = this._rtBuffer.slice(totalLength);
+        this.logger.trace('realtime frame', this.logger.formatBuffer(message))
 
-        if (!checkNotEventTCP(message)) continue;
+        if (!checkNotEventTCP(message)) {
+          try {
+            const header = decodeTCPHeader(message.subarray(0, 16))
+            const payload = removeTcpHeader(message)
+            this.logger.warn('realtime frame filtered', {
+              command: exportErrorMessage(header.commandId),
+              commandId: header.commandId,
+              event: payload.length >= 6 ? payload.readUInt16LE(4) : 'unknown',
+            })
+          } catch (err) {
+            this.logger.warn('realtime frame filtered with undecodable header', { error: err && err.message ? err.message : err })
+          }
+          continue;
+        }
         if (message.length >= MIN_REALTIME_PACKET) {
-          cb(decodeRecordRealTimeLog52(message));
+          try {
+            const event = decodeRecordRealTimeLog52(message)
+            this.logger.debug('realtime event parsed', event)
+            cb(event);
+          } catch (err) {
+            this.logger.error('realtime event decode failed', { error: err && err.message ? err.message : err })
+          }
+        } else {
+          this.logger.warn('realtime frame too short', { length: message.length, minLength: MIN_REALTIME_PACKET })
         }
       }
     })

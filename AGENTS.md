@@ -12,6 +12,7 @@ Key Files
 - `zklibudp.js` — UDP transport; user/timezone/group commands; realtime logs.
 - `zklibtcp.js` — TCP transport; feature parity for most commands; different realtime framing.
 - `utils.js` — binary encoders/decoders for all protocol payloads.
+- `helpers/logger.js` — structured logger with `silent`→`trace` levels.
 - `constants.js` — command codes, event flags, request templates.
 - `helpers/errorLog.js` — minimal logging utilities.
 - `test/*.spec.js` — Mocha unit and wrapper tests.
@@ -99,7 +100,12 @@ Testing
   - Set env: `ZKLIB_E2E_IP`, `ZKLIB_E2E_PORT`, `ZKLIB_E2E_TIMEOUT`, `ZKLIB_E2E_UID` … (see repo README for specifics), then run selected e2e specs.
 
 Debugging Tips
-- Realtime event tracing (UDP): zklibudp logs `[ZK RT RAW]`, `[ZK EVT DETECT]`, `[ZK RT PARSED]` to help classify frames. This is useful when tuning event parsing across models.
+- Diagnostic logging:
+  - Logging is off by default (`silent`).
+  - Use `zk.setLogLevel('debug')` for connection/auth/command flow.
+  - Use `zk.setLogLevel('trace')` for raw TCP/UDP packet hex and realtime framing details.
+  - Apps can redirect logs with `zk.setLogger(logger)` where `logger` exposes `error`, `warn`, `info`, `debug`, and/or `trace`.
+  - TCP/UDP realtime paths log registration, raw packets, frame filtering, and parsed events when `trace` is enabled.
 - Timezone decoding quirks:
   - Devices may prepend an 8-byte ACK; `decodeTimezoneInfo` auto-skips.
   - Some devices only return a 2-byte index with `0x1ca7` footer; others return a 4-byte header; both are handled.

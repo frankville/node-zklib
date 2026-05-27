@@ -119,6 +119,35 @@ const groupInfo = await zkInstance.getUserGroup(123);
 
 Each helper wraps the low-level commands (`CMD_TZ_WRQ`, `CMD_TZ_RRQ`, `CMD_USERTZ_WRQ`, `CMD_GRPTZ_WRQ`), handling byte encoding for you. Use `getUserTimezones` / `getGroupTimezones` to inspect current assignments.
 
+## Diagnostic Logging
+
+Logging is disabled by default. Applications can enable structured logs when diagnosing device communication:
+
+```js
+const zk = new ZKLib(ip, 4370, 10000, 'tcp', undefined, commCode, {
+  logLevel: 'debug',
+  logger: console
+});
+
+zk.setLogLevel('trace'); // includes raw packet hex
+```
+
+Supported levels are `silent`, `error`, `warn`, `info`, `debug`, and `trace`.
+
+Use `debug` for connection/authentication/command flow and `trace` only for deep protocol diagnostics because it logs raw TCP/UDP packet hex:
+
+```js
+zk.setLogger({
+  error: line => writeLog(line),
+  warn: line => writeLog(line),
+  info: line => writeLog(line),
+  debug: line => writeLog(line),
+  trace: line => writeLog(line)
+});
+```
+
+For TCP realtime troubleshooting, `trace` shows whether the device sends any bytes after `CMD_REG_EVENT`, the TCP frame boundaries, filtered events, and decoded attendance payloads.
+
 ## Protocol Mapping
 
 The high‑level API maps to zk‑protocol commands as follows:
