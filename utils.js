@@ -644,8 +644,106 @@ module.exports.decodeRecordRealTimeLog52 =(recordData)=>{
 
   const attTime = parseHexToTime(recvData.subarray(26,26+6))
 
-  return { userId, attTime}
+  const event = {
+    userId,
+    attTime,
+    event_type: COMMANDS.EF_ATTLOG,
+    att_date: attTime
+  }
 
+  if (recvData.length >= 26) {
+    event.verif_type = recvData.readUInt16LE(24)
+  }
+
+  if (/^\d+$/.test(userId)) {
+    event.user_sn = Number(userId)
+  }
+
+  return event
+
+}
+
+module.exports.decodeCompactTCPRealTimeAttendance = (recordData) => {
+  const payload = removeTcpHeader(recordData)
+  const recvData = payload.subarray(8)
+
+  if (recvData.length < 12) {
+    throw new Error(`compact realtime attendance frame too short: ${recvData.length}`)
+  }
+
+  const attTime = parseHexToTime(recvData.subarray(6, 12))
+  const userSn = recvData.readUInt32LE(0)
+
+  const event = {
+    user_sn: userSn,
+    userId: String(userSn),
+    verif_type: recvData.readUInt8(4),
+    verif_state: recvData.readUInt8(5),
+    attTime,
+    att_date: attTime,
+    event_type: COMMANDS.EF_ATTLOG
+  }
+
+  return event
+}
+
+const classifyTCPRealTimeEvent = (data) => {
+  try {
+    const payload = removeTcpHeader(data)
+    if (!Buffer.isBuffer(payload) || payload.length < 6) {
+      return { isRealtime: false, commandId: null, eventType: null }
+    }
+
+    const commandId = payload.readUIntLE(0, 2)
+    const eventType = payload.readUIntLE(4, 2)
+
+    return {
+      isRealtime: commandId === COMMANDS.CMD_REG_EVENT,
+      commandId,
+      eventType
+    }
+  } catch (err) {
+    log(`[228] : ${err.toString()} ,${data.toString('hex')} `)
+    return { isRealtime: false, commandId: null, eventType: null, error: err }
+  }
+}
+
+module.exports.classifyTCPRealTimeEvent = classifyTCPRealTimeEvent
+
+module.exports.decodeTCPRealTimeEvent = (recordData) => {
+  const classification = classifyTCPRealTimeEvent(recordData)
+  const payload = removeTcpHeader(recordData)
+
+  if (!classification.isRealtime) {
+    return {
+      event_type: classification.eventType,
+      full_data: recordData
+    }
+  }
+
+  try {
+    switch (classification.eventType) {
+      case COMMANDS.EF_ATTLOG:
+        if (payload.length >= 20 && payload.length < 40) {
+          return module.exports.decodeCompactTCPRealTimeAttendance(recordData)
+        }
+        return module.exports.decodeRecordRealTimeLog52(recordData)
+      case COMMANDS.EF_VERIFY:
+      case COMMANDS.EF_ALARM:
+        return module.exports.decodeRealTimeEvent(payload)
+      default:
+        return {
+          event_type: classification.eventType,
+          full_data: recordData
+        }
+    }
+  } catch (err) {
+    return {
+      event_type: classification.eventType,
+      full_data: recordData,
+      decode_error: err && err.message ? err.message : String(err)
+    }
+  }
 }
 
 module.exports.decodeUDPHeader = (header)=> {
@@ -680,15 +778,7 @@ module.exports.exportErrorMessage = (commandValue)=>{
 }
 
 module.exports.checkNotEventTCP = (data)=> {
-  try{
-    data = removeTcpHeader(data)
-    const commandId = data.readUIntLE(0,2)
-    const event = data.readUIntLE(4,2)
-    return event === COMMANDS.EF_ATTLOG && commandId === COMMANDS.CMD_REG_EVENT
-  }catch(err){
-    log(`[228] : ${err.toString()} ,${data.toString('hex')} `)
-    return false 
-  }
+  return classifyTCPRealTimeEvent(data).isRealtime
 }
 
 module.exports.checkNotEventUDP = (data)=>{

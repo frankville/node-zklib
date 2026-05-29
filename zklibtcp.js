@@ -4,10 +4,12 @@ const { createLogger } = require('./helpers/logger')
 const { createTCPHeader,
   exportErrorMessage,
   removeTcpHeader,
+  decodeUserData28,
   decodeUserData72,
   decodeRecordData40,
-  decodeRecordRealTimeLog52,
   checkNotEventTCP,
+  classifyTCPRealTimeEvent,
+  decodeTCPRealTimeEvent,
   decodeTCPHeader,
   encodeUserInfo72,
   encodeTimezoneInfo,
@@ -22,6 +24,51 @@ const { createTCPHeader,
   makeCommKey } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
+
+const USER_PACKET_SIZE_28 = 28
+const USER_PACKET_SIZE_72 = 72
+
+const isPrintable = (value) => /^[\x20-\x7E]*$/.test(String(value || ''))
+
+const scoreDecodedUser = (user) => {
+  let score = 0
+  if (Number.isInteger(user.uid) && user.uid > 0 && user.uid <= 65535) score += 2
+  if (Number.isInteger(user.role) && user.role >= 0 && user.role <= 14) score += 1
+  if (isPrintable(user.name)) score += 1
+  if (String(user.name || '').length > 0) score += 1
+  if (user.userId !== undefined && String(user.userId).length > 0) score += 1
+  return score
+}
+
+const decodeTCPUserRecords = (userData) => {
+  const candidates = [
+    { packetSize: USER_PACKET_SIZE_72, decoder: decodeUserData72 },
+    { packetSize: USER_PACKET_SIZE_28, decoder: decodeUserData28 }
+  ].filter(candidate => userData.length > 0 && userData.length % candidate.packetSize === 0)
+
+  const fallback = candidates.length > 0
+    ? candidates
+    : [{ packetSize: USER_PACKET_SIZE_72, decoder: decodeUserData72 }]
+
+  const decodedCandidates = fallback.map(candidate => {
+    let remaining = userData
+    const users = []
+    while (remaining.length >= candidate.packetSize) {
+      users.push(candidate.decoder(remaining.subarray(0, candidate.packetSize)))
+      remaining = remaining.subarray(candidate.packetSize)
+    }
+    const totalScore = users.reduce((sum, user) => sum + scoreDecodedUser(user), 0)
+    const averageScore = users.length > 0 ? totalScore / users.length : 0
+    return { ...candidate, users, averageScore }
+  })
+
+  decodedCandidates.sort((left, right) => {
+    if (right.averageScore !== left.averageScore) return right.averageScore - left.averageScore
+    return right.packetSize - left.packetSize
+  })
+
+  return decodedCandidates[0].users
+}
 
 class ZKLibTCP {
   constructor(ip, port, timeout, comm_code = 0, options = {}) {
@@ -39,6 +86,7 @@ class ZKLibTCP {
     this.socket = null;
     this.openDoorDelaySec = 3;
     this._rtBuffer = Buffer.alloc(0);
+    this._realtimeDataHandler = null;
     this.logger = options.logger || createLogger({
       namespace: 'node-zklib:tcp',
       baseMeta: { ip: this.ip, port: this.port, transport: 'tcp' },
@@ -133,6 +181,7 @@ class ZKLibTCP {
   closeSocket() {
     return new Promise((resolve, reject) => {
       this._rtBuffer = Buffer.alloc(0);
+      this._realtimeDataHandler = null;
       this.socket.removeAllListeners('data')
       this.socket.end(() => {
         clearTimeout(timer)
@@ -177,19 +226,31 @@ class ZKLibTCP {
     return new Promise((resolve, reject) => {
       let timer = null
       let replyBuffer = Buffer.from([])
-      const internalCallback = (data) => {
+      let settled = false
+      const cleanup = () => {
         this.socket.removeListener('data', handleOnData)
         timer && clearTimeout(timer)
+      }
+      const internalCallback = (data) => {
+        if (settled) return
+        settled = true
+        cleanup()
         resolve(data)
+      }
+      const internalReject = (err) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(err)
       }
 
       const handleOnData = (data) => {
         this.logger.trace('request data chunk received', this.logger.formatBuffer(data))
-        replyBuffer = Buffer.concat([replyBuffer, data])
         if (checkNotEventTCP(data)) {
           this.logger.debug('request data ignored realtime event')
           return;
         }
+        replyBuffer = Buffer.concat([replyBuffer, data])
         clearTimeout(timer)   
         const header = decodeTCPHeader(replyBuffer.subarray(0,16));
         this.logger.debug('request data header', {
@@ -204,7 +265,7 @@ class ZKLibTCP {
           }, 1000)
         }else{
           timer = setTimeout(() => {
-            reject(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'))
+            internalReject(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'))
           }, this.timeout)
 
           const packetLength = data.readUIntLE(4, 2)
@@ -221,11 +282,11 @@ class ZKLibTCP {
       this.socket.write(msg, null, err => {
         if (err) {
           this.logger.error('request data write failed', { error: err && err.message ? err.message : err })
-          reject(err)
+          return internalReject(err)
         }
 
         timer = setTimeout(() => {
-          reject(Error('TIMEOUT_IN_RECEIVING_RESPONSE_AFTER_REQUESTING_DATA'))
+          internalReject(Error('TIMEOUT_IN_RECEIVING_RESPONSE_AFTER_REQUESTING_DATA'))
         }, this.timeout)
 
       })
@@ -363,10 +424,12 @@ class ZKLibTCP {
           let timer = setTimeout(() => {
             internalCallback(replyData, new Error('TIMEOUT WHEN RECEIVING PACKET'))
           }, timeout)
+          let closeHandler = null
 
 
           const internalCallback = (replyData, err = null) => {
-            // this.socket && this.socket.removeListener('data', handleOnData)
+            this.socket && this.socket.removeListener('data', handleOnData)
+            closeHandler && this.socket && this.socket.removeListener('close', closeHandler)
             timer && clearTimeout(timer)
             resolve({ data: replyData, err })
 
@@ -406,9 +469,10 @@ class ZKLibTCP {
             }
           }
 
-          this.socket.once('close', () => {
+          closeHandler = () => {
             internalCallback(replyData, new Error('Socket is disconnected unexpectedly'))
-          })
+          }
+          this.socket.once('close', closeHandler)
 
           this.socket.on('data', handleOnData);
 
@@ -466,19 +530,8 @@ class ZKLibTCP {
     }
 
 
-    const USER_PACKET_SIZE = 72
-
-    let userData = data.data.subarray(4)
-
-    let users = []
-
-    while (userData.length >= USER_PACKET_SIZE) {
-      const user = decodeUserData72(userData.subarray(0, USER_PACKET_SIZE))
-      users.push(user)
-      userData = userData.subarray(USER_PACKET_SIZE)
-
-      
-    }
+    const userData = data.data.subarray(4)
+    const users = decodeTCPUserRecords(userData)
     
     return { data: users, err: data.err }
   }
@@ -660,12 +713,27 @@ class ZKLibTCP {
     return await this.executeCmd(COMMANDS.CMD_REFRESHDATA, '')
   }
 
-  async getRealTimeLogs(cb = () => { }) {
+  async getRealTimeLogs(cb = () => { }, options = {}) {
+    if (typeof cb !== 'function') {
+      options = cb || {}
+      cb = () => {}
+    }
+
     this.replyId++;
     this._rtBuffer = Buffer.alloc(0);
 
-    const buf = createTCPHeader(COMMANDS.CMD_REG_EVENT, this.sessionId, this.replyId, Buffer.from([0x01, 0x00, 0x00, 0x00]))
-    this.logger.info('registering realtime events', { flags: 'EF_ATTLOG', replyId: this.replyId })
+    const flags = options.flags
+    const eventPayload = flags === undefined
+      ? REQUEST_DATA.GET_REAL_TIME_EVENT
+      : Buffer.alloc(4)
+    if (flags !== undefined) {
+      eventPayload.writeUInt32LE(flags, 0)
+    }
+    const buf = createTCPHeader(COMMANDS.CMD_REG_EVENT, this.sessionId, this.replyId, eventPayload)
+    this.logger.info('registering realtime events', {
+      flags: flags === undefined ? 'GET_REAL_TIME_EVENT' : flags,
+      replyId: this.replyId
+    })
     this.logger.trace('realtime register packet', this.logger.formatBuffer(buf))
 
     this.socket.write(buf, null, err => {
@@ -677,10 +745,14 @@ class ZKLibTCP {
     })
 
     const TCP_MAGIC = Buffer.from([0x50, 0x50, 0x82, 0x7d]);
-    // Minimum bytes needed: 8 (TCP prefix) + 8 (ZK inner header) + 26 (fields before timestamp) + 6 (timestamp) = 48
-    const MIN_REALTIME_PACKET = 48;
+    // Compact realtime attendance frames use: 8 (TCP prefix) + 8 (ZK inner header) + 12 (event data).
+    const MIN_REALTIME_PACKET = 28;
 
-    this.socket.listenerCount('data') === 0 && this.socket.on('data', (data) => {
+    if (this._realtimeDataHandler) {
+      this.socket.removeListener('data', this._realtimeDataHandler)
+    }
+
+    this._realtimeDataHandler = (data) => {
       this.logger.trace('realtime raw chunk', this.logger.formatBuffer(data))
       this._rtBuffer = Buffer.concat([this._rtBuffer, data]);
       this.logger.debug('realtime buffer updated', { bufferLength: this._rtBuffer.length })
@@ -703,7 +775,14 @@ class ZKLibTCP {
         this._rtBuffer = this._rtBuffer.slice(totalLength);
         this.logger.trace('realtime frame', this.logger.formatBuffer(message))
 
-        if (!checkNotEventTCP(message)) {
+        const classification = classifyTCPRealTimeEvent(message)
+        this.logger.debug('realtime frame classified', {
+          isRealtime: classification.isRealtime,
+          commandId: classification.commandId,
+          eventType: classification.eventType,
+        })
+
+        if (!classification.isRealtime) {
           try {
             const header = decodeTCPHeader(message.subarray(0, 16))
             const payload = removeTcpHeader(message)
@@ -717,10 +796,13 @@ class ZKLibTCP {
           }
           continue;
         }
-        if (message.length >= MIN_REALTIME_PACKET) {
+        if (message.length >= MIN_REALTIME_PACKET || classification.eventType !== COMMANDS.EF_ATTLOG) {
           try {
-            const event = decodeRecordRealTimeLog52(message)
+            const event = decodeTCPRealTimeEvent(message)
             this.logger.debug('realtime event parsed', event)
+            if (event && event.full_data) {
+              this.logger.trace('realtime unknown event data', this.logger.formatBuffer(event.full_data))
+            }
             cb(event);
           } catch (err) {
             this.logger.error('realtime event decode failed', { error: err && err.message ? err.message : err })
@@ -729,7 +811,9 @@ class ZKLibTCP {
           this.logger.warn('realtime frame too short', { length: message.length, minLength: MIN_REALTIME_PACKET })
         }
       }
-    })
+    }
+
+    this.socket.on('data', this._realtimeDataHandler)
 
   }
 
