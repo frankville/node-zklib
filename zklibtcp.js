@@ -4,6 +4,7 @@ const { createLogger } = require('./helpers/logger')
 const { createTCPHeader,
   exportErrorMessage,
   removeTcpHeader,
+  decodeUserData28,
   decodeUserData72,
   decodeRecordData40,
   checkNotEventTCP,
@@ -23,6 +24,51 @@ const { createTCPHeader,
   makeCommKey } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
+
+const USER_PACKET_SIZE_28 = 28
+const USER_PACKET_SIZE_72 = 72
+
+const isPrintable = (value) => /^[\x20-\x7E]*$/.test(String(value || ''))
+
+const scoreDecodedUser = (user) => {
+  let score = 0
+  if (Number.isInteger(user.uid) && user.uid > 0 && user.uid <= 65535) score += 2
+  if (Number.isInteger(user.role) && user.role >= 0 && user.role <= 14) score += 1
+  if (isPrintable(user.name)) score += 1
+  if (String(user.name || '').length > 0) score += 1
+  if (user.userId !== undefined && String(user.userId).length > 0) score += 1
+  return score
+}
+
+const decodeTCPUserRecords = (userData) => {
+  const candidates = [
+    { packetSize: USER_PACKET_SIZE_72, decoder: decodeUserData72 },
+    { packetSize: USER_PACKET_SIZE_28, decoder: decodeUserData28 }
+  ].filter(candidate => userData.length > 0 && userData.length % candidate.packetSize === 0)
+
+  const fallback = candidates.length > 0
+    ? candidates
+    : [{ packetSize: USER_PACKET_SIZE_72, decoder: decodeUserData72 }]
+
+  const decodedCandidates = fallback.map(candidate => {
+    let remaining = userData
+    const users = []
+    while (remaining.length >= candidate.packetSize) {
+      users.push(candidate.decoder(remaining.subarray(0, candidate.packetSize)))
+      remaining = remaining.subarray(candidate.packetSize)
+    }
+    const totalScore = users.reduce((sum, user) => sum + scoreDecodedUser(user), 0)
+    const averageScore = users.length > 0 ? totalScore / users.length : 0
+    return { ...candidate, users, averageScore }
+  })
+
+  decodedCandidates.sort((left, right) => {
+    if (right.averageScore !== left.averageScore) return right.averageScore - left.averageScore
+    return right.packetSize - left.packetSize
+  })
+
+  return decodedCandidates[0].users
+}
 
 class ZKLibTCP {
   constructor(ip, port, timeout, comm_code = 0, options = {}) {
@@ -484,19 +530,8 @@ class ZKLibTCP {
     }
 
 
-    const USER_PACKET_SIZE = 72
-
-    let userData = data.data.subarray(4)
-
-    let users = []
-
-    while (userData.length >= USER_PACKET_SIZE) {
-      const user = decodeUserData72(userData.subarray(0, USER_PACKET_SIZE))
-      users.push(user)
-      userData = userData.subarray(USER_PACKET_SIZE)
-
-      
-    }
+    const userData = data.data.subarray(4)
+    const users = decodeTCPUserRecords(userData)
     
     return { data: users, err: data.err }
   }
