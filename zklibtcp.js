@@ -710,8 +710,8 @@ class ZKLibTCP {
     })
 
     const TCP_MAGIC = Buffer.from([0x50, 0x50, 0x82, 0x7d]);
-    // Minimum bytes needed: 8 (TCP prefix) + 8 (ZK inner header) + 26 (fields before timestamp) + 6 (timestamp) = 48
-    const MIN_REALTIME_PACKET = 48;
+    // Compact realtime attendance frames use: 8 (TCP prefix) + 8 (ZK inner header) + 12 (event data).
+    const MIN_REALTIME_PACKET = 28;
 
     if (this._realtimeDataHandler) {
       this.socket.removeListener('data', this._realtimeDataHandler)

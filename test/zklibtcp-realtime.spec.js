@@ -37,6 +37,28 @@ describe('ZKLibTCP realtime helpers', () => {
     expect(event.attTime.getDate()).to.equal(28);
   });
 
+  it('decodes compact TCP realtime attendance frames captured from devices', () => {
+    const frame = Buffer.from(
+      '5050827d14000000f401d0cb010000000100000000001a051c150318',
+      'hex'
+    );
+    const event = decodeTCPRealTimeEvent(frame);
+
+    expect(event.event_type).to.equal(COMMANDS.EF_ATTLOG);
+    expect(event.user_sn).to.equal(1);
+    expect(event.userId).to.equal('1');
+    expect(event.verif_type).to.equal(0);
+    expect(event.verif_state).to.equal(0);
+    expect(event.attTime).to.be.instanceOf(Date);
+    expect(event.att_date).to.equal(event.attTime);
+    expect(event.attTime.getFullYear()).to.equal(2026);
+    expect(event.attTime.getMonth()).to.equal(4);
+    expect(event.attTime.getDate()).to.equal(28);
+    expect(event.attTime.getHours()).to.equal(21);
+    expect(event.attTime.getMinutes()).to.equal(3);
+    expect(event.attTime.getSeconds()).to.equal(24);
+  });
+
   it('classifies CMD_REG_EVENT frames beyond EF_ATTLOG as realtime', () => {
     const verifyFrame = makeRealtimeFrame(COMMANDS.EF_VERIFY, Buffer.alloc(4));
     const alarmFrame = makeRealtimeFrame(COMMANDS.EF_ALARM, Buffer.alloc(4));

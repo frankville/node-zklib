@@ -663,6 +663,30 @@ module.exports.decodeRecordRealTimeLog52 =(recordData)=>{
 
 }
 
+module.exports.decodeCompactTCPRealTimeAttendance = (recordData) => {
+  const payload = removeTcpHeader(recordData)
+  const recvData = payload.subarray(8)
+
+  if (recvData.length < 12) {
+    throw new Error(`compact realtime attendance frame too short: ${recvData.length}`)
+  }
+
+  const attTime = parseHexToTime(recvData.subarray(6, 12))
+  const userSn = recvData.readUInt32LE(0)
+
+  const event = {
+    user_sn: userSn,
+    userId: String(userSn),
+    verif_type: recvData.readUInt8(4),
+    verif_state: recvData.readUInt8(5),
+    attTime,
+    att_date: attTime,
+    event_type: COMMANDS.EF_ATTLOG
+  }
+
+  return event
+}
+
 const classifyTCPRealTimeEvent = (data) => {
   try {
     const payload = removeTcpHeader(data)
@@ -700,6 +724,9 @@ module.exports.decodeTCPRealTimeEvent = (recordData) => {
   try {
     switch (classification.eventType) {
       case COMMANDS.EF_ATTLOG:
+        if (payload.length >= 20 && payload.length < 40) {
+          return module.exports.decodeCompactTCPRealTimeAttendance(recordData)
+        }
         return module.exports.decodeRecordRealTimeLog52(recordData)
       case COMMANDS.EF_VERIFY:
       case COMMANDS.EF_ALARM:
