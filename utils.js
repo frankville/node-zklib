@@ -376,24 +376,39 @@ module.exports.decodeTimezoneInfo = (data, fallbackIndex = 0) => {
         };
     }
 
-    const index = data.length >= 4 ? data.readUInt32LE(0) : data.length >= 2 ? data.readUInt16LE(0) : fallbackIndex;
+    const payload = (
+        data.length >= 40 &&
+        (data.readUInt16LE(0) === 2000 || data.readUInt16LE(0) === 2002)
+    ) ? data.subarray(8) : data;
+
+    const hasReadTrailer = payload.length >= 32 &&
+        payload.readUInt8(30) === 0xA7 &&
+        payload.readUInt8(31) === 0x1C;
+    const index = hasReadTrailer
+        ? payload.readUInt16LE(0)
+        : payload.length >= 4
+            ? payload.readUInt32LE(0)
+            : payload.length >= 2
+                ? payload.readUInt16LE(0)
+                : fallbackIndex;
+    const dayOffset = hasReadTrailer ? 2 : 4;
     const days = {};
 
     DAYS.forEach((day, idx) => {
-        const offset = 4 + (idx * 4);
-        if (data.length >= offset + 4) {
+        const offset = dayOffset + (idx * 4);
+        if (payload.length >= offset + 4) {
             days[day] = {
-                startHour: data.readUInt8(offset),
-                startMinute: data.readUInt8(offset + 1),
-                endHour: data.readUInt8(offset + 2),
-                endMinute: data.readUInt8(offset + 3)
+                startHour: payload.readUInt8(offset),
+                startMinute: payload.readUInt8(offset + 1),
+                endHour: payload.readUInt8(offset + 2),
+                endMinute: payload.readUInt8(offset + 3)
             };
         } else {
             days[day] = { startHour: 0, startMinute: 0, endHour: 0, endMinute: 0 };
         }
     });
 
-    return { index, days };
+    return { index: index || fallbackIndex, days };
 };
 
 module.exports.encodeUserGroupInfo = (options = {}) => {
@@ -404,7 +419,7 @@ module.exports.encodeUserGroupInfo = (options = {}) => {
         throw new Error('encodeUserGroupInfo: uid is required');
     }
 
-    buffer.writeUInt32LE(toUInt32(options.uid), 0);
+    buffer.writeUInt8(toUInt32(options.uid) & 0xFF, 0);
     buffer.writeUInt8(toUInt16(options.group ?? options.groupNumber ?? 1) & 0xFF, 4);
 
     return buffer;
@@ -427,7 +442,7 @@ module.exports.encodeUserTimezoneInfo = (options = {}) => {
         throw new Error('encodeUserTimezoneInfo: uid is required');
     }
 
-    buffer.writeUInt32LE(toUInt32(options.uid), 0);
+    buffer.writeUInt32LE(toUInt32(options.uid) & 0xFF, 0);
 
     const useUserTimezones = options.useUserTimezones !== undefined
         ? !!options.useUserTimezones

@@ -17,10 +17,13 @@ describe('ZKLibUDP user group helpers', () => {
     reply.writeUInt8(6, 8);
     const executeStub = sinon.stub(zk, 'executeCmd').resolves(reply);
 
-    const res = await zk.getUserGroup(42);
+    const res = await zk.getUserGroup(298);
     expect(executeStub.calledOnce).to.equal(true);
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_USERGRP_RRQ);
-    expect(executeStub.firstCall.args[1].readUInt32LE(0)).to.equal(42);
+    expect(executeStub.firstCall.args[1].readUInt8(0)).to.equal(42);
+    expect(executeStub.firstCall.args[1].readUInt8(1)).to.equal(0);
+    expect(executeStub.firstCall.args[1].readUInt8(2)).to.equal(0);
+    expect(executeStub.firstCall.args[1].readUInt8(3)).to.equal(0);
     expect(res.group).to.equal(6);
   });
 

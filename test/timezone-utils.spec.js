@@ -42,6 +42,42 @@ describe('Timezone encoding helpers', () => {
     expect(decoded.days.tuesday).to.deep.equal({ startHour: 0, startMinute: 0, endHour: 0, endMinute: 0 });
   });
 
+  it('decodes timezone read replies with 2-byte index and trailer', () => {
+    const buffer = Buffer.alloc(32);
+    buffer.writeUInt16LE(48, 0);
+    buffer.writeUInt8(17, 2);
+    buffer.writeUInt8(12, 3);
+    buffer.writeUInt8(17, 4);
+    buffer.writeUInt8(13, 5);
+    buffer.writeUInt8(17, 6);
+    buffer.writeUInt8(37, 7);
+    buffer.writeUInt8(17, 8);
+    buffer.writeUInt8(37, 9);
+    buffer.writeUInt8(0xA7, 30);
+    buffer.writeUInt8(0x1C, 31);
+
+    const decoded = decodeTimezoneInfo(buffer);
+    expect(decoded.index).to.equal(48);
+    expect(decoded.days.sunday).to.deep.equal({ startHour: 17, startMinute: 12, endHour: 17, endMinute: 13 });
+    expect(decoded.days.monday).to.deep.equal({ startHour: 17, startMinute: 37, endHour: 17, endMinute: 37 });
+  });
+
+  it('decodes timezone read replies when the ACK header is still present', () => {
+    const reply = Buffer.alloc(40);
+    reply.writeUInt16LE(2000, 0);
+    reply.writeUInt16LE(9, 8);
+    reply.writeUInt8(8, 10);
+    reply.writeUInt8(30, 11);
+    reply.writeUInt8(18, 12);
+    reply.writeUInt8(0, 13);
+    reply.writeUInt8(0xA7, 38);
+    reply.writeUInt8(0x1C, 39);
+
+    const decoded = decodeTimezoneInfo(reply);
+    expect(decoded.index).to.equal(9);
+    expect(decoded.days.sunday).to.deep.equal({ startHour: 8, startMinute: 30, endHour: 18, endMinute: 0 });
+  });
+
   it('encodes user timezone structure', () => {
     const buffer = encodeUserTimezoneInfo({
       uid: 10,
@@ -102,9 +138,12 @@ describe('Timezone encoding helpers', () => {
   });
 
   it('encodes user group info', () => {
-    const buffer = encodeUserGroupInfo({ uid: 10, group: 7 });
+    const buffer = encodeUserGroupInfo({ uid: 266, group: 7 });
     expect(buffer.length).to.equal(5);
     expect(buffer.readUInt8(0)).to.equal(10);
+    expect(buffer.readUInt8(1)).to.equal(0);
+    expect(buffer.readUInt8(2)).to.equal(0);
+    expect(buffer.readUInt8(3)).to.equal(0);
     expect(buffer.readUInt8(4)).to.equal(7);
 
     const decoded = decodeUserGroupInfo(Buffer.from([7]));

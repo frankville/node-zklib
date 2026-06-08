@@ -552,7 +552,7 @@ class ZKLibUDP {
     req.writeUInt32LE(toUInt32(index), 0);
     const reply = await this.executeCmd(COMMANDS.CMD_TZ_RRQ, req);
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
-    return decodeTimezoneInfo(data);
+    return decodeTimezoneInfo(data, toUInt32(index));
   }
 
   async setTimezone(info = {}) {
@@ -562,7 +562,7 @@ class ZKLibUDP {
 
   async getUserTimezones(uid) {
     const req = Buffer.alloc(4);
-    req.writeUInt32LE(toUInt32(uid), 0);
+    req.writeUInt8(toUInt32(uid) & 0xFF, 0);
     const reply = await this.executeCmd(COMMANDS.CMD_USERTZ_RRQ, req);
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
     return decodeUserTimezoneInfo(data);
@@ -588,7 +588,7 @@ class ZKLibUDP {
 
   async getUserGroup(uid) {
     const req = Buffer.alloc(4);
-    req.writeUInt32LE(toUInt32(uid), 0);
+    req.writeUInt8(toUInt32(uid) & 0xFF, 0);
     const reply = await this.executeCmd(COMMANDS.CMD_USERGRP_RRQ, req);
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
     return decodeUserGroupInfo(data);
