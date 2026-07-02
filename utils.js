@@ -377,21 +377,24 @@ module.exports.decodeTimezoneInfo = (data, fallbackIndex = 0) => {
     }
 
     const payload = (
-        data.length >= 40 &&
+        data.length >= 8 &&
         (data.readUInt16LE(0) === 2000 || data.readUInt16LE(0) === 2002)
     ) ? data.subarray(8) : data;
 
     const hasReadTrailer = payload.length >= 32 &&
         payload.readUInt8(30) === 0xA7 &&
         payload.readUInt8(31) === 0x1C;
-    const index = hasReadTrailer
+    const hasShortReadSchedule = payload.length === 28;
+    const index = hasShortReadSchedule
+        ? fallbackIndex
+        : hasReadTrailer
         ? payload.readUInt16LE(0)
         : payload.length >= 4
             ? payload.readUInt32LE(0)
             : payload.length >= 2
                 ? payload.readUInt16LE(0)
                 : fallbackIndex;
-    const dayOffset = hasReadTrailer ? 2 : 4;
+    const dayOffset = hasShortReadSchedule ? 0 : hasReadTrailer ? 2 : 4;
     const days = {};
 
     DAYS.forEach((day, idx) => {
@@ -442,7 +445,7 @@ module.exports.encodeUserTimezoneInfo = (options = {}) => {
         throw new Error('encodeUserTimezoneInfo: uid is required');
     }
 
-    buffer.writeUInt32LE(toUInt32(options.uid) & 0xFF, 0);
+    buffer.writeUInt32LE(toUInt32(options.uid), 0);
 
     const useUserTimezones = options.useUserTimezones !== undefined
         ? !!options.useUserTimezones

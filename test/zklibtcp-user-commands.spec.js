@@ -78,4 +78,16 @@ describe('ZKLibTCP user management helpers', () => {
     expect(executeStub.getCall(1).args[1].readUInt8(0)).to.equal(15 & 0xFF);
     expect(executeStub.getCall(1).args[1].readUInt8(4)).to.equal(6);
   });
+
+  it('reads user timezones with the full uid payload', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const readReply = Buffer.alloc(8 + 8);
+    readReply.writeUInt16LE(1, 8);
+    const executeStub = sinon.stub(zk, 'executeCmd').resolves(readReply);
+
+    const res = await zk.getUserTimezones(1111);
+    expect(res.useGroupTimezones).to.equal(true);
+    expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_USERTZ_RRQ);
+    expect(executeStub.firstCall.args[1].readUInt32LE(0)).to.equal(1111);
+  });
 });

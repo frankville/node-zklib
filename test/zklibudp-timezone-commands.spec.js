@@ -57,8 +57,7 @@ describe('ZKLibUDP timezone and access helpers', () => {
     const res = await zk.getUserTimezones(268);
     expect(res.useGroupTimezones).to.equal(true);
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_USERTZ_RRQ);
-    expect(executeStub.firstCall.args[1].readUInt8(0)).to.equal(12);
-    expect(executeStub.firstCall.args[1].readUInt8(1)).to.equal(0);
+    expect(executeStub.firstCall.args[1].readUInt32LE(0)).to.equal(268);
 
     await zk.setUserTimezones({ uid: 12, timezones: [1, 2, 3], useUserTimezones: true });
     expect(executeStub.secondCall.args[0]).to.equal(COMMANDS.CMD_USERTZ_WRQ);

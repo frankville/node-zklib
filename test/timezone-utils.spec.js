@@ -78,6 +78,27 @@ describe('Timezone encoding helpers', () => {
     expect(decoded.days.sunday).to.deep.equal({ startHour: 8, startMinute: 30, endHour: 18, endMinute: 0 });
   });
 
+  it('decodes compact timezone read replies with only day segments', () => {
+    const buffer = Buffer.from('080f122d0900111e0a051037072d130a08000c000d00141e00000000', 'hex');
+
+    const decoded = decodeTimezoneInfo(buffer, 49);
+    expect(decoded.index).to.equal(49);
+    expect(decoded.days.sunday).to.deep.equal({ startHour: 8, startMinute: 15, endHour: 18, endMinute: 45 });
+    expect(decoded.days.monday).to.deep.equal({ startHour: 9, startMinute: 0, endHour: 17, endMinute: 30 });
+    expect(decoded.days.saturday).to.deep.equal({ startHour: 0, startMinute: 0, endHour: 0, endMinute: 0 });
+  });
+
+  it('decodes compact timezone read replies when the ACK header is still present', () => {
+    const reply = Buffer.concat([
+      Buffer.from('d00722d76b350400', 'hex'),
+      Buffer.from('080f122d0900111e0a051037072d130a08000c000d00141e00000000', 'hex')
+    ]);
+
+    const decoded = decodeTimezoneInfo(reply, 49);
+    expect(decoded.index).to.equal(49);
+    expect(decoded.days.sunday).to.deep.equal({ startHour: 8, startMinute: 15, endHour: 18, endMinute: 45 });
+  });
+
   it('encodes user timezone structure', () => {
     const buffer = encodeUserTimezoneInfo({
       uid: 10,
@@ -105,6 +126,16 @@ describe('Timezone encoding helpers', () => {
 
     expect(buffer.readUInt32LE(4)).to.equal(0);
     expect(buffer.readUInt32LE(8)).to.equal(0);
+  });
+
+  it('keeps the full uid when encoding user timezone writes', () => {
+    const buffer = encodeUserTimezoneInfo({
+      uid: 1111,
+      timezones: [1],
+      useUserTimezones: true
+    });
+
+    expect(buffer.readUInt32LE(0)).to.equal(1111);
   });
 
   it('encodes group timezone info with verify style and holiday flag', () => {
