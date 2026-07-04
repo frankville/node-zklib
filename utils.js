@@ -105,10 +105,38 @@ const removeTcpHeader  = (buf)=>{
 
 module.exports.removeTcpHeader = removeTcpHeader
 
+const ROLE_VALUE_TO_NAME = {
+    0: 'user',
+    1: 'enroller',
+    3: 'admin',
+    7: 'superadmin'
+};
+
+const decodePermissionToken = (permissionToken) => {
+    const token = permissionToken & 0xFF;
+    const roleValue = ((token & 0x02) ? 0x01 : 0) |
+        ((token & 0x04) ? 0x02 : 0) |
+        ((token & 0x08) ? 0x04 : 0);
+
+    return {
+        permissionToken: token,
+        enabled: (token & 0x01) === 0,
+        roleValue,
+        roleName: ROLE_VALUE_TO_NAME[roleValue] || 'unknown'
+    };
+};
+
 module.exports.decodeUserData28 = (userData)=>{
+    const permissionToken = userData.readUIntLE(2, 1);
     const user = {
       uid: userData.readUIntLE(0, 2),
-      role: userData.readUIntLE(2, 1),
+      role: permissionToken,
+      ...decodePermissionToken(permissionToken),
+      password: userData
+        .subarray(3, 3+5)
+        .toString('ascii')
+        .split('\0')
+        .shift(),
       name: userData
         .slice(8,8+8)
         .toString('ascii')
@@ -120,20 +148,33 @@ module.exports.decodeUserData28 = (userData)=>{
 }
 
 module.exports.decodeUserData72 = (userData)=>{
+    const permissionToken = userData.readUIntLE(2, 1);
+    const userTimezoneFlag = userData.readUIntLE(40, 2);
+    const timezones = [
+        userData.readUIntLE(42, 2),
+        userData.readUIntLE(44, 2),
+        userData.readUIntLE(46, 2)
+    ];
     const user = {
         uid: userData.readUIntLE(0, 2),
-        role: userData.readUIntLE(2, 1),
+        role: permissionToken,
+        ...decodePermissionToken(permissionToken),
         password: userData
           .subarray(3, 3+8)
           .toString('ascii')
           .split('\0')
           .shift(),
         name: userData
-          .slice(11)
+          .subarray(11, 11+24)
           .toString('ascii')
           .split('\0')
           .shift(),
         cardno: userData.readUIntLE(35,4),
+        cardNumber: userData.readUIntLE(35,4),
+        groupNumber: userData.readUIntLE(39,1),
+        userTimezoneFlag,
+        useGroupTimezones: userTimezoneFlag === 0,
+        timezones,
         userId: userData
           .slice(48, 48+9)
           .toString('ascii')

@@ -13,11 +13,22 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
   const port = Number(process.env.ZKLIB_E2E_PORT || 4370);
   const timeoutMs = Number(process.env.ZKLIB_E2E_SOCKET_TIMEOUT || 10000);
   const inport = Number(process.env.ZKLIB_E2E_INPORT || 5500);
+  const connectionType = process.env.ZKLIB_E2E_CONNECTION_TYPE || 'udp';
+  const userPacketSize = Number(process.env.ZKLIB_E2E_USER_PACKET_SIZE || 0);
 
   let zk = null;
 
   before(async () => {
-    zk = new ZKLib(ip, port, timeoutMs, 'udp', inport);
+    const options = userPacketSize ? { userPacketSize } : {};
+    zk = new ZKLib(
+      ip,
+      port,
+      timeoutMs,
+      connectionType,
+      connectionType === 'udp' ? inport : undefined,
+      0,
+      options
+    );
     await zk.createSocket();
   });
 
@@ -61,10 +72,12 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
         (user) => Number(user.uid ?? user.user_sn ?? user.userSn) === uid
       );
       expect(createdUser, 'user should be present after creation').to.exist;
+      expect(createdUser.password, 'password should be readable after creation').to.equal(baseUser.password);
+      expect(createdUser.enabled, 'user should be enabled after creation').to.equal(true);
       created = true;
 
       await zk.setUser({
-        ...baseUser,
+        ...createdUser,
         name: 'E2EUSR2'
       });
       await zk.refreshData();
@@ -75,6 +88,8 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
       );
       expect(updatedUser, 'user should still exist after update').to.exist;
       expect((updatedUser.name || '').replace(/\0+$/, '').trim()).to.equal('E2EUSR2');
+      expect(updatedUser.password, 'password should survive read-modify-write update').to.equal(baseUser.password);
+      expect(updatedUser.enabled, 'enabled flag should survive read-modify-write update').to.equal(true);
     } finally {
       if (created) {
         await zk.deleteUser(uid).catch(() => {});

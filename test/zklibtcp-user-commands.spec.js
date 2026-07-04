@@ -48,6 +48,20 @@ describe('ZKLibTCP user management helpers', () => {
     expect(data.readUInt16LE(0)).to.equal(124);
   });
 
+  it('uses compact user payloads from constructor options', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000, {
+      userPacketSize: 28
+    });
+    const executeStub = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+
+    await zk.setUser({ uid: 125, userId: 125, name: 'Compact' });
+
+    const [command, data] = executeStub.firstCall.args;
+    expect(command).to.equal(COMMANDS.CMD_USER_WRQ);
+    expect(data.length).to.equal(28);
+    expect(data.readUInt16LE(0)).to.equal(125);
+  });
+
   it('delegates deleteUser to CMD_DELETE_USER with the uid payload', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
     const executeStub = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));

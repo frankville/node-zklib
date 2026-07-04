@@ -22,7 +22,7 @@ const ZKLib = require('./zklib')
 const test = async () => {
 
 
-    let zkInstance = new ZKLib('10.20.0.7', 4370, 10000, 4000);
+    let zkInstance = new ZKLib('10.20.0.7', 4370, 10000, 'udp', 4000);
     try {
         // Create socket to machine 
         await zkInstance.createSocket()
@@ -94,6 +94,48 @@ test()
     // unlock the door  
     executeCmd(CMD.CMD_UNLOCK, '')
 
+```
+
+## User Management
+
+Applications can create, edit, and delete device users directly through the public facade. `setUser(info)` is an upsert: passing an existing `uid` updates that user, and passing a new `uid` creates it. Call `refreshData()` after writes so the device persists and applies the change.
+
+```js
+const ZKLib = require('node-zklib');
+
+const zk = new ZKLib('192.168.1.75', 4370, 10000, 'udp', 5500);
+await zk.createSocket();
+
+await zk.setUser({
+  uid: 123,
+  userId: 123,
+  name: 'Alice',
+  password: '4321',
+  role: 'user',
+  enabled: true
+});
+await zk.refreshData();
+
+// Editing is the same command with the same uid. Fields returned by getUsers()
+// include permissionToken/password data so a read-modify-write does not reset them.
+const users = (await zk.getUsers()).data;
+const current = users.find(user => Number(user.uid) === 123);
+await zk.setUser({ ...current, name: 'Alice B' });
+await zk.refreshData();
+
+await zk.deleteUser(123);
+await zk.refreshData();
+await zk.disconnect();
+```
+
+For door access, user CRUD is only one part of the configuration. A PIN/password user must also be allowed by the current access rules: assign the user to a group with `setUserGroup`, ensure that group has valid timezones with `setGroupTimezones`, and ensure the group is present in at least one unlock combination with `setUnlockGroups` or `setUnlockGroup`.
+
+TCP devices may use either 72-byte SSR user records or compact 28-byte records. `getUsers()` detects the record size and reuses it for later writes. If an application needs to create a user over TCP before listing users, pass `{ userPacketSize: 28 }` for compact devices:
+
+```js
+const zk = new ZKLib('192.168.1.75', 4370, 10000, 'tcp', undefined, 0, {
+  userPacketSize: 28
+});
 ```
 
 ## Timezone Helpers
@@ -222,6 +264,7 @@ Additional environment variables:
 - `ZKLIB_E2E_SOCKET_TIMEOUT` to tweak the connection timeout (default 10000 ms).
 - `ZKLIB_E2E_TIMEOUT` to override Mocha’s timeout for the e2e suite (default 45000 ms).
 - `ZKLIB_E2E_CONNECTION_TYPE` to use `udp` or `tcp` for e2e specs (default `udp`).
+- `ZKLIB_E2E_USER_PACKET_SIZE=28` to force compact user writes during the user lifecycle e2e, useful for compact TCP devices.
 - `ZKLIB_E2E_UNLOCK_GROUPS=1` to enable the unlock-groups mutation e2e.
 - `ZKLIB_E2E_UNLOCK_COMBINATION` and `ZKLIB_E2E_UNLOCK_GROUP` to choose the temporary unlock combination/group (defaults: combination 2, group 1).
 

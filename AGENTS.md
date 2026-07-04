@@ -34,6 +34,7 @@ Transport Model
 
 User Encoding
 - 28-byte (UDP) vs 72-byte (SSR/TCP) payloads.
+- TCP defaults to SSR/72B unless `getUsers()` has detected compact 28B records, or the caller passes `{ userPacketSize: 28 }` / `userPacketFormat: 'legacy'` in constructor options, or `packetSize: 28` / `format: 'legacy'` in `setUser(info)`.
 - Encoders: `encodeUserInfo28` and `encodeUserInfo72`.
   - `name`: ASCII only, padded with `\0`; UDP 8 chars; TCP 24 chars.
   - `password`: ASCII; UDP 5 chars; TCP 8 chars.

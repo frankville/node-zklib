@@ -6,12 +6,17 @@ const { createLogger } = require('./helpers/logger')
 
 class ZKLib {
     constructor(ip, port, timeout, connType, inport, comm_code = 0, options = {}){
+        if (typeof connType === 'number' && inport === undefined) {
+            inport = connType
+            connType = 'udp'
+        }
+
         if (comm_code && typeof comm_code === 'object' && !Buffer.isBuffer(comm_code)) {
             options = comm_code
             comm_code = 0
         }
 
-        this.connectionType = connType;
+        this.connectionType = connType === 'tcp' ? 'tcp' : 'udp';
         this.logger = createLogger({
             level: options.logLevel,
             logger: options.logger,
@@ -21,9 +26,11 @@ class ZKLib {
         })
 
         this.zklibTcp = new ZKLibTCP(ip, port, timeout, comm_code, {
+            ...options,
             logger: this.logger.child('tcp', { port, transport: 'tcp' })
         })
         this.zklibUdp = new ZKLibUDP(ip,port,timeout , inport, {
+            ...options,
             logger: this.logger.child('udp', { port, inport, transport: 'udp' })
         })
         this.interval = null 

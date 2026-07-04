@@ -93,7 +93,14 @@ class ZKLibTCP {
     this.replyId = 0
     this.socket = null;
     this.openDoorDelaySec = 3;
-    this.userPacketSize = null;
+    const configuredUserPacketSize = Number(options.userPacketSize || options.userRecordSize || 0)
+    if (options.userPacketFormat === 'legacy' || configuredUserPacketSize === USER_PACKET_SIZE_28) {
+      this.userPacketSize = USER_PACKET_SIZE_28;
+    } else if (options.userPacketFormat === 'ssr' || configuredUserPacketSize === USER_PACKET_SIZE_72) {
+      this.userPacketSize = USER_PACKET_SIZE_72;
+    } else {
+      this.userPacketSize = null;
+    }
     this._rtBuffer = Buffer.alloc(0);
     this._realtimeDataHandler = null;
     this.logger = options.logger || createLogger({
