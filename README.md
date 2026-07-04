@@ -115,9 +115,12 @@ await zkInstance.setGroupTimezones({ group: 2, timezones: [5, 0, 0], verifyStyle
 
 await zkInstance.setUserGroup({ uid: 123, group: 2 });
 const groupInfo = await zkInstance.getUserGroup(123);
+
+await zkInstance.setUnlockGroup({ combination: 1, groups: [2] });
+const unlockGroups = await zkInstance.getUnlockGroups();
 ```
 
-Each helper wraps the low-level commands (`CMD_TZ_WRQ`, `CMD_TZ_RRQ`, `CMD_USERTZ_WRQ`, `CMD_GRPTZ_WRQ`), handling byte encoding for you. Use `getUserTimezones` / `getGroupTimezones` to inspect current assignments.
+Each helper wraps the low-level commands (`CMD_TZ_WRQ`, `CMD_TZ_RRQ`, `CMD_USERTZ_WRQ`, `CMD_GRPTZ_WRQ`, `CMD_ULG_WRQ`, `CMD_ULG_RRQ`), handling byte encoding for you. Use `getUserTimezones` / `getGroupTimezones` / `getUnlockGroups` to inspect current assignments.
 
 ## Diagnostic Logging
 
@@ -172,6 +175,10 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `setGroupTimezones(info)` | `CMD_GRPTZ_WRQ` | 3 fixed slots; `verifyStyle` + holiday bit. |
 | `getUserGroup(uid)` | `CMD_USERGRP_RRQ` | Reads the user’s group (1–100). |
 | `setUserGroup(info)` | `CMD_USERGRP_WRQ` | Writes user→group membership. |
+| `getUnlockGroup(combination)` | `CMD_ULG_RRQ` | Reads one unlock combination, with up to 5 groups. |
+| `setUnlockGroup(info)` | `CMD_ULG_WRQ` | Writes one binary unlock combination. |
+| `getUnlockGroups()` | `CMD_ULG_RRQ` | Reads all combinations; supports compact ASCII replies like `1:::::::::`. |
+| `setUnlockGroups(info)` | `CMD_ULG_WRQ` | Writes compact ASCII unlock-group config from `combinations`. |
 | `getRealTimeLogs(cb)` | `CMD_REG_EVENT` | Emits realtime frames; see EF_* flags below. |
 
 Event flags used in realtime:
@@ -183,11 +190,17 @@ Timezone notes:
 - Devices have fixed 3 timezone slots per user/group; unused slots must be zero. Some firmwares return values like `256` for tz `1` (endianness quirk) — callers may normalize.
 - Closed days may read back as 23→0 on some models; treat as “no access”.
 
+Unlock group notes:
+- A user can belong to one group, that group can have timezones, and unlock combinations decide which groups can actually release the door.
+- Binary unlock combinations have 5 group slots plus `validGroups`. Compact devices may return one ASCII string for all 10 combinations, such as `1:::::::::` for “combination 1 uses group 1”.
+
 ## Tests
 
 - Unit tests live under `test/*.spec.js` and exercise user CRUD plus the new timezone helper methods (`setTimezone`, `setUserTimezones`, `setGroupTimezones`).
-- There is an optional end-to-end spec (`test/e2e-user-lifecycle.spec.js`) that drives a create → update → delete cycle against a physical device.  
-  It is skipped automatically unless the required environment variables are provided.
+- There are optional end-to-end specs for physical devices:
+  - `test/e2e-user-lifecycle.spec.js` drives a create → update → delete user cycle.
+  - `test/e2e-unlock-groups.spec.js` writes one temporary unlock combination, verifies readback, and restores the original config.
+  They are skipped automatically unless the required environment variables are provided.
 
 ### Run unit tests
 
@@ -208,7 +221,12 @@ Additional environment variables:
 - `ZKLIB_E2E_INPORT` to change the UDP listening port (default 5500).
 - `ZKLIB_E2E_SOCKET_TIMEOUT` to tweak the connection timeout (default 10000 ms).
 - `ZKLIB_E2E_TIMEOUT` to override Mocha’s timeout for the e2e suite (default 45000 ms).
+- `ZKLIB_E2E_CONNECTION_TYPE` to use `udp` or `tcp` for e2e specs (default `udp`).
+- `ZKLIB_E2E_UNLOCK_GROUPS=1` to enable the unlock-groups mutation e2e.
+- `ZKLIB_E2E_UNLOCK_COMBINATION` and `ZKLIB_E2E_UNLOCK_GROUP` to choose the temporary unlock combination/group (defaults: combination 2, group 1).
 
 **Warning:** the end-to-end scenario mutates real users on the device. Use a dedicated UID or a lab unit.
+
+**Unlock group warning:** the unlock-groups e2e mutates door access rules briefly, then restores the original config in `finally`. Run it only on a lab device or a supervised test door.
 
 **User ID note:** legacy commands (notably `CMD_USERGRP_WRQ/RRQ`) only transmit the low byte of the UID. Keep test/account UIDs ≤ 255 whenever you intend to manage group membership programmatically.

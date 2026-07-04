@@ -274,6 +274,34 @@ class ZKLib {
         )
     }
 
+    async getUnlockGroup(combination){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getUnlockGroup(combination),
+            ()=> this.zklibUdp.getUnlockGroup(combination)
+        )
+    }
+
+    async setUnlockGroup(info){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setUnlockGroup(info),
+            ()=> this.zklibUdp.setUnlockGroup(info)
+        )
+    }
+
+    async getUnlockGroups(){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getUnlockGroups(),
+            ()=> this.zklibUdp.getUnlockGroups()
+        )
+    }
+
+    async setUnlockGroups(info){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setUnlockGroups(info),
+            ()=> this.zklibUdp.setUnlockGroups(info)
+        )
+    }
+
     async deleteUser(uid){
         return await this.functionWrapper(
             ()=> this.zklibTcp.deleteUser(uid),

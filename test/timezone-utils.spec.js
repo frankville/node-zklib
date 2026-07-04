@@ -10,7 +10,11 @@ const {
   encodeGroupTimezoneInfo,
   decodeGroupTimezoneInfo,
   encodeUserGroupInfo,
-  decodeUserGroupInfo
+  decodeUserGroupInfo,
+  encodeUnlockGroupInfo,
+  decodeUnlockGroupInfo,
+  encodeUnlockGroupsInfo,
+  decodeUnlockGroupsInfo
 } = require('../utils');
 
 describe('Timezone encoding helpers', () => {
@@ -99,6 +103,13 @@ describe('Timezone encoding helpers', () => {
     expect(decoded.days.sunday).to.deep.equal({ startHour: 8, startMinute: 15, endHour: 18, endMinute: 45 });
   });
 
+  it('returns an empty schedule for blank timezone read replies', () => {
+    const decoded = decodeTimezoneInfo(Buffer.alloc(0), 12);
+    expect(decoded.index).to.equal(12);
+    expect(decoded.days.sunday).to.deep.equal({ startHour: 0, startMinute: 0, endHour: 0, endMinute: 0 });
+    expect(decoded.days.saturday).to.deep.equal({ startHour: 0, startMinute: 0, endHour: 0, endMinute: 0 });
+  });
+
   it('encodes user timezone structure', () => {
     const buffer = encodeUserTimezoneInfo({
       uid: 10,
@@ -168,6 +179,12 @@ describe('Timezone encoding helpers', () => {
     expect(decoded.holiday).to.equal(false);
   });
 
+  it('normalizes endian-swapped group timezone slots from compact devices', () => {
+    const decoded = decodeGroupTimezoneInfo(Buffer.from('0100000001000000', 'hex'));
+    expect(decoded.group).to.equal(1);
+    expect(decoded.timezones).to.deep.equal([0, 1, 0]);
+  });
+
   it('encodes user group info', () => {
     const buffer = encodeUserGroupInfo({ uid: 266, group: 7 });
     expect(buffer.length).to.equal(5);
@@ -179,5 +196,51 @@ describe('Timezone encoding helpers', () => {
 
     const decoded = decodeUserGroupInfo(Buffer.from([7]));
     expect(decoded.group).to.equal(7);
+  });
+
+  it('encodes and decodes binary unlock group combinations', () => {
+    const buffer = encodeUnlockGroupInfo({
+      combination: 7,
+      groups: [1, 2],
+    });
+
+    expect(buffer.length).to.equal(8);
+    expect(buffer.readUInt8(0)).to.equal(7);
+    expect(buffer.readUInt8(1)).to.equal(1);
+    expect(buffer.readUInt8(2)).to.equal(2);
+    expect(buffer.readUInt16LE(6)).to.equal(2);
+
+    const decoded = decodeUnlockGroupInfo(buffer);
+    expect(decoded).to.deep.equal({
+      combination: 7,
+      groups: [1, 2, 0, 0, 0],
+      validGroups: 2,
+      format: 'binary'
+    });
+  });
+
+  it('decodes ASCII unlock group strings returned by compact devices', () => {
+    const decoded = decodeUnlockGroupsInfo(Buffer.from('1:::::::::\0', 'ascii'));
+
+    expect(decoded.format).to.equal('ascii');
+    expect(decoded.raw).to.equal('1:::::::::');
+    expect(decoded.combinations[0].groups).to.deep.equal([1, 0, 0, 0, 0]);
+    expect(decoded.combinations[0].validGroups).to.equal(1);
+    expect(decoded.combinations[1].groups).to.deep.equal([0, 0, 0, 0, 0]);
+
+    const second = decodeUnlockGroupInfo(Buffer.from('1:::::::::\0', 'ascii'), 2);
+    expect(second.combination).to.equal(2);
+    expect(second.validGroups).to.equal(0);
+  });
+
+  it('encodes ASCII unlock group strings for compact devices', () => {
+    const buffer = encodeUnlockGroupsInfo({
+      combinations: [
+        { combination: 1, groups: [1] },
+        { combination: 3, groups: [2, 4] }
+      ]
+    });
+
+    expect(buffer.toString('ascii')).to.equal('1::2,4:::::::\0');
   });
 });

@@ -311,6 +311,28 @@ const clamp = (value, min, max) => {
 
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
+const emptyTimezoneDays = () => DAYS.reduce((days, day) => {
+    days[day] = { startHour: 0, startMinute: 0, endHour: 0, endMinute: 0 };
+    return days;
+}, {});
+
+const normalizeTimezoneSlot = (value) => {
+    if (value > 0 && value % 256 === 0 && value / 256 <= 50) {
+        return value / 256;
+    }
+    return value;
+};
+
+const fixedNumberArray = (values, length, byteSized = false) => {
+    const normalized = [];
+    const list = Array.isArray(values) ? values : [];
+    for (let i = 0; i < length; i++) {
+        const value = toUInt16(list[i] ?? 0);
+        normalized.push(byteSized ? value & 0xFF : value);
+    }
+    return normalized;
+};
+
 const normaliseDayKey = (key) => {
     if (!key) return null;
     const lower = key.toString().toLowerCase();
@@ -372,7 +394,7 @@ module.exports.decodeTimezoneInfo = (data, fallbackIndex = 0) => {
     if (!Buffer.isBuffer(data) || data.length === 0) {
         return {
             index: fallbackIndex,
-            days: normaliseTimezoneSchedule([], null)
+            days: emptyTimezoneDays()
         };
     }
 
@@ -473,7 +495,7 @@ module.exports.decodeUserTimezoneInfo = (data) => {
 
     return {
         useGroupTimezones: flag === 1,
-        timezones: [tz1, tz2, tz3]
+        timezones: [tz1, tz2, tz3].map(normalizeTimezoneSlot)
     };
 };
 
@@ -517,10 +539,172 @@ module.exports.decodeGroupTimezoneInfo = (data) => {
             safeReadUInt16(data, 1),
             safeReadUInt16(data, 3),
             safeReadUInt16(data, 5)
-        ],
+        ].map(normalizeTimezoneSlot),
         verifyStyle: verifyByte & 0x7F,
         holiday: (verifyByte & 0x80) === 0x80
     };
+};
+
+const normalizeUnlockPayload = (data) => {
+    if (!Buffer.isBuffer(data)) return Buffer.alloc(0);
+    if (
+        data.length >= 8 &&
+        (data.readUInt16LE(0) === COMMANDS.CMD_ACK_OK || data.readUInt16LE(0) === COMMANDS.CMD_ACK_DATA)
+    ) {
+        return data.subarray(8);
+    }
+    return data;
+};
+
+const activeUnlockGroups = (groups) => groups.filter(group => group > 0);
+
+const unlockGroupFromValues = (combination, groups, validGroups, format = 'binary', raw = undefined) => {
+    const fixedGroups = fixedNumberArray(groups, 5, true);
+    const activeGroups = activeUnlockGroups(fixedGroups);
+    const resolvedValidGroups = validGroups === undefined || validGroups === null
+        ? activeGroups.length
+        : toUInt16(validGroups);
+    const result = {
+        combination: toUInt16(combination) & 0xFF,
+        groups: fixedGroups,
+        validGroups: resolvedValidGroups,
+        format
+    };
+    if (raw !== undefined) {
+        result.raw = raw;
+    }
+    return result;
+};
+
+const parseUnlockAsciiToken = (token) => {
+    if (!token) return [];
+    const matches = token.match(/\d+/g) || [];
+    return matches.map(value => toUInt16(value)).filter(value => value > 0).slice(0, 5);
+};
+
+const looksLikeUnlockAscii = (payload) => {
+    if (!payload.length) return false;
+    const text = payload.toString('ascii').replace(/\0+$/g, '');
+    return text.includes(':') && /^[0-9:,+&\-\s]*$/.test(text);
+};
+
+module.exports.encodeUnlockGroupInfo = (options = {}) => {
+    const buffer = Buffer.alloc(8);
+    buffer.fill(0);
+
+    const combination = options.combination ?? options.combinationNumber ?? options.combNo ?? options.index;
+    if (combination === undefined || combination === null) {
+        throw new Error('encodeUnlockGroupInfo: combination is required');
+    }
+
+    const groups = options.groups || [
+        options.group1,
+        options.group2,
+        options.group3,
+        options.group4,
+        options.group5
+    ];
+    const fixedGroups = fixedNumberArray(groups, 5, true);
+    const validGroups = options.validGroups ?? activeUnlockGroups(fixedGroups).length;
+
+    buffer.writeUInt8(toUInt16(combination) & 0xFF, 0);
+    fixedGroups.forEach((group, index) => buffer.writeUInt8(group, 1 + index));
+    buffer.writeUInt16LE(toUInt16(validGroups), 6);
+
+    return buffer;
+};
+
+module.exports.encodeUnlockGroupsInfo = (options = {}) => {
+    if (typeof options === 'string') {
+        return Buffer.from(options.endsWith('\0') ? options : `${options}\0`, 'ascii');
+    }
+
+    const source = Array.isArray(options)
+        ? options
+        : (options.combinations || options.unlockGroups || []);
+    const slots = Array(10).fill('');
+
+    source.forEach((entry, index) => {
+        const combination = entry.combination ?? entry.combinationNumber ?? entry.combNo ?? entry.index ?? (index + 1);
+        const slotIndex = clamp(combination, 1, 10) - 1;
+        const groups = fixedNumberArray(entry.groups || [
+            entry.group1,
+            entry.group2,
+            entry.group3,
+            entry.group4,
+            entry.group5
+        ], 5, true);
+        slots[slotIndex] = activeUnlockGroups(groups).join(',');
+    });
+
+    return Buffer.from(`${slots.join(':')}\0`, 'ascii');
+};
+
+module.exports.decodeUnlockGroupsInfo = (data) => {
+    const payload = normalizeUnlockPayload(data);
+
+    if (!payload.length) {
+        return {
+            format: 'empty',
+            combinations: Array.from({ length: 10 }, (_, index) =>
+                unlockGroupFromValues(index + 1, [], 0, 'empty')
+            )
+        };
+    }
+
+    if (looksLikeUnlockAscii(payload)) {
+        const raw = payload.toString('ascii').replace(/\0+$/g, '');
+        const tokens = raw.split(':');
+        return {
+            format: 'ascii',
+            raw,
+            combinations: Array.from({ length: 10 }, (_, index) =>
+                unlockGroupFromValues(index + 1, parseUnlockAsciiToken(tokens[index] || ''), undefined, 'ascii', raw)
+            )
+        };
+    }
+
+    const chunks = [];
+    let remaining = payload;
+    while (remaining.length >= 8) {
+        chunks.push(remaining.subarray(0, 8));
+        remaining = remaining.subarray(8);
+    }
+
+    if (!chunks.length) {
+        chunks.push(payload);
+    }
+
+    return {
+        format: 'binary',
+        combinations: chunks.map((chunk, index) => module.exports.decodeUnlockGroupInfo(chunk, index + 1))
+    };
+};
+
+module.exports.decodeUnlockGroupInfo = (data, fallbackCombination = 0) => {
+    const payload = normalizeUnlockPayload(data);
+
+    if (!payload.length) {
+        return unlockGroupFromValues(fallbackCombination, [], 0, 'empty');
+    }
+
+    if (looksLikeUnlockAscii(payload)) {
+        const decoded = module.exports.decodeUnlockGroupsInfo(payload);
+        const index = Math.max(1, Math.min(10, toUInt16(fallbackCombination, 1))) - 1;
+        return decoded.combinations[index] || unlockGroupFromValues(fallbackCombination || 1, [], 0, 'ascii', decoded.raw);
+    }
+
+    const combination = payload.length >= 1 ? payload.readUInt8(0) : fallbackCombination;
+    const groups = [
+        payload.length >= 2 ? payload.readUInt8(1) : 0,
+        payload.length >= 3 ? payload.readUInt8(2) : 0,
+        payload.length >= 4 ? payload.readUInt8(3) : 0,
+        payload.length >= 5 ? payload.readUInt8(4) : 0,
+        payload.length >= 6 ? payload.readUInt8(5) : 0
+    ];
+    const validGroups = payload.length >= 8 ? payload.readUInt16LE(6) : activeUnlockGroups(groups).length;
+
+    return unlockGroupFromValues(combination || fallbackCombination, groups, validGroups, 'binary');
 };
 
 module.exports.decodeRecordData40 = (recordData)=>{

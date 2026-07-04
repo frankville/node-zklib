@@ -12,6 +12,7 @@ const { createTCPHeader,
   decodeTCPRealTimeEvent,
   decodeTCPHeader,
   encodeUserInfo72,
+  encodeUserInfo28,
   encodeTimezoneInfo,
   decodeTimezoneInfo,
   encodeUserTimezoneInfo,
@@ -21,6 +22,10 @@ const { createTCPHeader,
   toUInt32,
   encodeUserGroupInfo,
   decodeUserGroupInfo,
+  encodeUnlockGroupInfo,
+  decodeUnlockGroupInfo,
+  encodeUnlockGroupsInfo,
+  decodeUnlockGroupsInfo,
   makeCommKey } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
@@ -67,7 +72,10 @@ const decodeTCPUserRecords = (userData) => {
     return right.packetSize - left.packetSize
   })
 
-  return decodedCandidates[0].users
+  return {
+    users: decodedCandidates[0].users,
+    packetSize: decodedCandidates[0].packetSize
+  }
 }
 
 class ZKLibTCP {
@@ -85,6 +93,7 @@ class ZKLibTCP {
     this.replyId = 0
     this.socket = null;
     this.openDoorDelaySec = 3;
+    this.userPacketSize = null;
     this._rtBuffer = Buffer.alloc(0);
     this._realtimeDataHandler = null;
     this.logger = options.logger || createLogger({
@@ -531,9 +540,10 @@ class ZKLibTCP {
 
 
     const userData = data.data.subarray(4)
-    const users = decodeTCPUserRecords(userData)
+    const decoded = decodeTCPUserRecords(userData)
+    this.userPacketSize = decoded.packetSize
     
-    return { data: users, err: data.err }
+    return { data: decoded.users, err: data.err }
   }
 
 
@@ -638,7 +648,10 @@ class ZKLibTCP {
   }
 
   async setUser(userInfo = {}) {
-    const payload = Buffer.isBuffer(userInfo) ? userInfo : encodeUserInfo72(userInfo);
+    const useLegacyPacket = userInfo &&
+      (userInfo.packetSize === 28 || userInfo.format === 'legacy' || this.userPacketSize === USER_PACKET_SIZE_28);
+    const encoder = useLegacyPacket ? encodeUserInfo28 : encodeUserInfo72;
+    const payload = Buffer.isBuffer(userInfo) ? userInfo : encoder(userInfo);
     return await this.executeCmd(COMMANDS.CMD_USER_WRQ, payload);
   }
 
@@ -692,6 +705,41 @@ class ZKLibTCP {
   async setUserGroup(info = {}) {
     const payload = Buffer.isBuffer(info) ? info : encodeUserGroupInfo(info);
     return await this.executeCmd(COMMANDS.CMD_USERGRP_WRQ, payload);
+  }
+
+  async getUnlockGroup(combination = 1) {
+    const req = Buffer.alloc(8);
+    req.writeUInt8(toUInt32(combination) & 0xFF, 0);
+    const reply = await this.executeCmd(COMMANDS.CMD_ULG_RRQ, req);
+    const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
+    return decodeUnlockGroupInfo(data, toUInt32(combination));
+  }
+
+  async setUnlockGroup(info = {}) {
+    const payload = Buffer.isBuffer(info) ? info : encodeUnlockGroupInfo(info);
+    return await this.executeCmd(COMMANDS.CMD_ULG_WRQ, payload);
+  }
+
+  async getUnlockGroups() {
+    const first = await this.getUnlockGroup(1);
+    if (first.format === 'ascii' && first.raw) {
+      return decodeUnlockGroupsInfo(Buffer.from(`${first.raw}\0`, 'ascii'));
+    }
+
+    const combinations = [first];
+    for (let combination = 2; combination <= 10; combination++) {
+      combinations.push(await this.getUnlockGroup(combination));
+    }
+
+    return { format: 'binary', combinations };
+  }
+
+  async setUnlockGroups(info = {}) {
+    if (!Buffer.isBuffer(info) && (info.combination || info.combinationNumber || info.combNo || info.index)) {
+      return await this.setUnlockGroup(info);
+    }
+    const payload = Buffer.isBuffer(info) ? info : encodeUnlockGroupsInfo(info);
+    return await this.executeCmd(COMMANDS.CMD_ULG_WRQ, payload);
   }
 
   async deleteUser(uid) {

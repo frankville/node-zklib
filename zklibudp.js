@@ -20,6 +20,10 @@ const {
   toUInt32,
   encodeUserGroupInfo,
   decodeUserGroupInfo,
+  encodeUnlockGroupInfo,
+  decodeUnlockGroupInfo,
+  encodeUnlockGroupsInfo,
+  decodeUnlockGroupsInfo,
   toUInt16
 } = require('./utils')
 
@@ -597,6 +601,41 @@ class ZKLibUDP {
   async setUserGroup(info = {}) {
     const payload = Buffer.isBuffer(info) ? info : encodeUserGroupInfo(info);
     return await this.executeCmd(COMMANDS.CMD_USERGRP_WRQ, payload);
+  }
+
+  async getUnlockGroup(combination = 1) {
+    const req = Buffer.alloc(8);
+    req.writeUInt8(toUInt32(combination) & 0xFF, 0);
+    const reply = await this.executeCmd(COMMANDS.CMD_ULG_RRQ, req);
+    const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
+    return decodeUnlockGroupInfo(data, toUInt32(combination));
+  }
+
+  async setUnlockGroup(info = {}) {
+    const payload = Buffer.isBuffer(info) ? info : encodeUnlockGroupInfo(info);
+    return await this.executeCmd(COMMANDS.CMD_ULG_WRQ, payload);
+  }
+
+  async getUnlockGroups() {
+    const first = await this.getUnlockGroup(1);
+    if (first.format === 'ascii' && first.raw) {
+      return decodeUnlockGroupsInfo(Buffer.from(`${first.raw}\0`, 'ascii'));
+    }
+
+    const combinations = [first];
+    for (let combination = 2; combination <= 10; combination++) {
+      combinations.push(await this.getUnlockGroup(combination));
+    }
+
+    return { format: 'binary', combinations };
+  }
+
+  async setUnlockGroups(info = {}) {
+    if (!Buffer.isBuffer(info) && (info.combination || info.combinationNumber || info.combNo || info.index)) {
+      return await this.setUnlockGroup(info);
+    }
+    const payload = Buffer.isBuffer(info) ? info : encodeUnlockGroupsInfo(info);
+    return await this.executeCmd(COMMANDS.CMD_ULG_WRQ, payload);
   }
 
   async deleteUser(uid) {

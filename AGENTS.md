@@ -24,12 +24,13 @@ Protocol Reference
   - User timezones: `CMD_USERTZ_RRQ`, `CMD_USERTZ_WRQ`
   - Group timezones: `CMD_GRPTZ_RRQ`, `CMD_GRPTZ_WRQ`
   - User group: `CMD_USERGRP_RRQ`, `CMD_USERGRP_WRQ`
+  - Unlock groups/combinations: `CMD_ULG_RRQ`, `CMD_ULG_WRQ`
   - Door control: `CMD_UNLOCK`, `CMD_DOORSTATE_RRQ`
   - Realtime events: `CMD_REG_EVENT`, event flags `EF_ATTLOG`, `EF_VERIFY`, `EF_ALARM`
 
 Transport Model
 - Both UDP and TCP are supported. The facade picks implementation via `zk.connectionType` (`'udp'` default, `'tcp'` optional).
-- Most public methods are identical across transports: `getUsers`, `setUser`, `deleteUser`, `getTimezone`, `setTimezone`, `getUserTimezones`, `setUserTimezones`, `getGroupTimezones`, `setGroupTimezones`, `getUserGroup`, `setUserGroup`, `openDoor`, `refreshData`, `enableDevice`, `disableDevice`.
+- Most public methods are identical across transports: `getUsers`, `setUser`, `deleteUser`, `getTimezone`, `setTimezone`, `getUserTimezones`, `setUserTimezones`, `getGroupTimezones`, `setGroupTimezones`, `getUserGroup`, `setUserGroup`, `getUnlockGroup`, `setUnlockGroup`, `getUnlockGroups`, `setUnlockGroups`, `openDoor`, `refreshData`, `enableDevice`, `disableDevice`.
 
 User Encoding
 - 28-byte (UDP) vs 72-byte (SSR/TCP) payloads.
@@ -67,6 +68,12 @@ User→Group Assignment
 - `encodeUserGroupInfo({ uid, group })` → 5 bytes: `uid(u32)`, `group(u8)`.
 - Many models materialize a group only after at least one user belongs to it. Reads for an unused group may return zeros until a user is assigned.
 
+Unlock Groups / Combinations
+- `encodeUnlockGroupInfo({ combination, groups, validGroups })` → 8 bytes: `combination(u8)`, 5 group slots (`u8`), `validGroups(u16)`.
+- `decodeUnlockGroupInfo(data, fallbackCombination)` handles the binary 8-byte form and compact ASCII forms.
+- `decodeUnlockGroupsInfo(data)` returns `{ format, combinations }`; compact devices may return ASCII like `1:::::::::` representing all 10 combinations in one string.
+- `setUnlockGroups({ combinations })` writes the compact ASCII form; `setUnlockGroup(info)` writes one binary combination.
+
 Realtime Events
 - UDP: `getRealTimeLogs(cb)` registers for realtime frames.
 - Event types: `EF_ATTLOG=1`, `EF_VERIFY=128`, `EF_ALARM=512` (see `constants.js`).
@@ -82,7 +89,7 @@ Public API (Facade)
   - `const zk = new ZKLib(ip, 4370, timeoutMs, inportForUDP);`
   - `zk.connectionType = 'udp' | 'tcp';`
   - `await zk.createSocket(onError, onClose, onTimeout);`
-  - Calls: `zk.getUsers()`, `zk.setUser()`, `zk.deleteUser()`, `zk.getTimezone(i)`, `zk.setTimezone(info)`, `zk.getUserTimezones(uid)`, `zk.setUserTimezones(info)`, `zk.getGroupTimezones(g)`, `zk.setGroupTimezones(info)`, `zk.getUserGroup(uid)`, `zk.setUserGroup(info)`, `zk.openDoor()`.
+  - Calls: `zk.getUsers()`, `zk.setUser()`, `zk.deleteUser()`, `zk.getTimezone(i)`, `zk.setTimezone(info)`, `zk.getUserTimezones(uid)`, `zk.setUserTimezones(info)`, `zk.getGroupTimezones(g)`, `zk.setGroupTimezones(info)`, `zk.getUserGroup(uid)`, `zk.setUserGroup(info)`, `zk.getUnlockGroups()`, `zk.setUnlockGroup(info)`, `zk.setUnlockGroups(info)`, `zk.openDoor()`.
   - For writes, callers often follow with `zk.refreshData()` to ensure persistence.
 
 Integration Patterns
@@ -98,6 +105,7 @@ Testing
   - Suites cover: user encoders (28/72), timezone/group/user-TZ encoders/decoders, UDP/TCP command wrappers.
 - E2E (optional; requires hardware):
   - Set env: `ZKLIB_E2E_IP`, `ZKLIB_E2E_PORT`, `ZKLIB_E2E_TIMEOUT`, `ZKLIB_E2E_UID` … (see repo README for specifics), then run selected e2e specs.
+  - Unlock-groups e2e is mutation-gated by `ZKLIB_E2E_UNLOCK_GROUPS=1`; it writes one temporary combination and restores the original config.
 
 Debugging Tips
 - Diagnostic logging:
