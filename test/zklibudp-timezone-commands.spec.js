@@ -47,15 +47,18 @@ describe('ZKLibUDP timezone and access helpers', () => {
 
   it('reads and writes user timezones', async () => {
     const zk = new ZKLibUDP('127.0.0.1', 4370, 1000, 5500);
-    const reply = Buffer.alloc(8 + 8);
-    reply.writeUInt16LE(1, 8); // use group flag
-    reply.writeUInt16LE(10, 10);
+    const reply = Buffer.concat([
+      Buffer.alloc(8),
+      Buffer.from('010000000a000000', 'hex')
+    ]);
     const executeStub = sinon.stub(zk, 'executeCmd');
     executeStub.onFirstCall().resolves(reply);
     executeStub.onSecondCall().resolves(Buffer.alloc(0));
 
     const res = await zk.getUserTimezones(268);
-    expect(res.useGroupTimezones).to.equal(true);
+    expect(res.useUserTimezones).to.equal(true);
+    expect(res.useGroupTimezones).to.equal(false);
+    expect(res.timezones).to.deep.equal([10, 0, 0]);
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_USERTZ_RRQ);
     expect(executeStub.firstCall.args[1].readUInt32LE(0)).to.equal(268);
 

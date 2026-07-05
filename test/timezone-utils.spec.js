@@ -124,9 +124,25 @@ describe('Timezone encoding helpers', () => {
     expect(buffer.readUInt32LE(12)).to.equal(2);
     expect(buffer.readUInt32LE(16)).to.equal(0);
 
-    const decoded = decodeUserTimezoneInfo(Buffer.from([0, 0, 1, 0, 2, 0, 0, 0]));
+    const decoded = decodeUserTimezoneInfo(Buffer.from([1, 0, 1, 0, 2, 0, 0, 0]));
+    expect(decoded.timezoneFlag).to.equal(1);
+    expect(decoded.useUserTimezones).to.equal(true);
     expect(decoded.useGroupTimezones).to.equal(false);
     expect(decoded.timezones).to.deep.equal([1, 2, 0]);
+  });
+
+  it('decodes compact 32-bit user timezone replies from access devices', () => {
+    const userMode = decodeUserTimezoneInfo(Buffer.from('0100000001000000', 'hex'));
+    expect(userMode.timezoneFlag).to.equal(1);
+    expect(userMode.useUserTimezones).to.equal(true);
+    expect(userMode.useGroupTimezones).to.equal(false);
+    expect(userMode.timezones).to.deep.equal([1, 0, 0]);
+
+    const groupMode = decodeUserTimezoneInfo(Buffer.from('feffffff01000000', 'hex'));
+    expect(groupMode.timezoneFlag).to.equal(0xFFFFFFFE);
+    expect(groupMode.useUserTimezones).to.equal(false);
+    expect(groupMode.useGroupTimezones).to.equal(true);
+    expect(groupMode.timezones).to.deep.equal([1, 0, 0]);
   });
 
   it('encodes user timezone structure for group usage', () => {
@@ -196,6 +212,11 @@ describe('Timezone encoding helpers', () => {
 
     const decoded = decodeUserGroupInfo(Buffer.from([7]));
     expect(decoded.group).to.equal(7);
+  });
+
+  it('returns group 0 for empty user group replies', () => {
+    const decoded = decodeUserGroupInfo(Buffer.alloc(0));
+    expect(decoded.group).to.equal(0);
   });
 
   it('encodes and decodes binary unlock group combinations', () => {

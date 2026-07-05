@@ -358,6 +358,9 @@ const emptyTimezoneDays = () => DAYS.reduce((days, day) => {
 }, {});
 
 const normalizeTimezoneSlot = (value) => {
+    if (value === 0xFFFF || value === 0xFFFFFFFE || value === 0xFFFFFFFF) {
+        return 0;
+    }
     if (value > 0 && value % 256 === 0 && value / 256 <= 50) {
         return value / 256;
     }
@@ -493,7 +496,7 @@ module.exports.encodeUserGroupInfo = (options = {}) => {
 
 module.exports.decodeUserGroupInfo = (data) => {
     if (!Buffer.isBuffer(data) || data.length === 0) {
-        return { group: 1 };
+        return { group: 0 };
     }
 
     const group = data.length >= 1 ? data.readUInt8(0) : 1;
@@ -529,14 +532,36 @@ module.exports.decodeUserTimezoneInfo = (data) => {
         throw new Error('decodeUserTimezoneInfo: invalid buffer');
     }
 
-    const flag = data.readUInt16LE(0);
-    const tz1 = data.readUInt16LE(2);
-    const tz2 = data.readUInt16LE(4);
-    const tz3 = data.readUInt16LE(6);
+    const compactFlag = data.readUInt32LE(0);
+    const isCompact32Bit = compactFlag === 0 ||
+        compactFlag === 1 ||
+        compactFlag === 0xFFFFFFFE ||
+        compactFlag === 0xFFFFFFFF;
+
+    const flag = isCompact32Bit ? compactFlag : data.readUInt16LE(0);
+    const timezones = [];
+
+    if (isCompact32Bit) {
+        for (let offset = 4; offset + 4 <= data.length && timezones.length < 3; offset += 4) {
+            timezones.push(data.readUInt32LE(offset));
+        }
+    } else {
+        for (let offset = 2; offset + 2 <= data.length && timezones.length < 3; offset += 2) {
+            timezones.push(data.readUInt16LE(offset));
+        }
+    }
+
+    while (timezones.length < 3) {
+        timezones.push(0);
+    }
+
+    const useUserTimezones = flag === 1;
 
     return {
-        useGroupTimezones: flag === 1,
-        timezones: [tz1, tz2, tz3].map(normalizeTimezoneSlot)
+        timezoneFlag: flag,
+        useUserTimezones,
+        useGroupTimezones: !useUserTimezones,
+        timezones: timezones.map(normalizeTimezoneSlot)
     };
 };
 

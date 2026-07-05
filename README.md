@@ -130,6 +130,23 @@ await zk.disconnect();
 
 For door access, user CRUD is only one part of the configuration. A PIN/password user must also be allowed by the current access rules: assign the user to a group with `setUserGroup`, ensure that group has valid timezones with `setGroupTimezones`, and ensure the group is present in at least one unlock combination with `setUnlockGroups` or `setUnlockGroup`.
 
+Users can either inherit their schedule from the assigned group or use their own user-level schedule:
+
+```js
+await zk.setUserGroup({ uid: 123, group: 1 });
+await zk.setUserTimezones({ uid: 123, useGroupTimezones: true });
+
+const inherited = await zk.getUserTimezones(123);
+// => { useGroupTimezones: true, useUserTimezones: false, timezones: [...] }
+
+await zk.setUserTimezones({ uid: 123, useUserTimezones: true, timezones: [1, 0, 0] });
+
+const direct = await zk.getUserTimezones(123);
+// => { useGroupTimezones: false, useUserTimezones: true, timezones: [1, 0, 0] }
+```
+
+Compact access-control devices may read back user timezone mode as a 32-bit flag. `1` means user-level timezones, while values such as `0xfffffffe` mean group-inherited timezones. The decoder normalizes those variants and hides sentinel timezone slots like `0xffff`.
+
 TCP devices may use either 72-byte SSR user records or compact 28-byte records. `getUsers()` detects the record size and reuses it for later writes. If an application needs to create a user over TCP before listing users, pass `{ userPacketSize: 28 }` for compact devices:
 
 ```js
@@ -211,7 +228,7 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `refreshData()` | `CMD_REFRESHDATA` | Recommended after writes. |
 | `getTimezone(index)` | `CMD_TZ_RRQ` | Decoder handles 2‑byte+footer and 4‑byte index formats. |
 | `setTimezone(info)` | `CMD_TZ_WRQ` | `encodeTimezoneInfo` packs 7×(start,end) day segments. |
-| `getUserTimezones(uid)` | `CMD_USERTZ_RRQ` | Returns `{ useGroupTimezones, timezones:[tz1,tz2,tz3] }`. |
+| `getUserTimezones(uid)` | `CMD_USERTZ_RRQ` | Returns `{ timezoneFlag, useUserTimezones, useGroupTimezones, timezones:[tz1,tz2,tz3] }`. |
 | `setUserTimezones(info)` | `CMD_USERTZ_WRQ` | 3 fixed slots; `flag=1` to use user TZ, `0` group TZ. |
 | `getGroupTimezones(group)` | `CMD_GRPTZ_RRQ` | Returns `{ group, timezones, verifyStyle, holiday }`. |
 | `setGroupTimezones(info)` | `CMD_GRPTZ_WRQ` | 3 fixed slots; `verifyStyle` + holiday bit. |
@@ -241,6 +258,7 @@ Unlock group notes:
 - Unit tests live under `test/*.spec.js` and exercise user CRUD plus the new timezone helper methods (`setTimezone`, `setUserTimezones`, `setGroupTimezones`).
 - There are optional end-to-end specs for physical devices:
   - `test/e2e-user-lifecycle.spec.js` drives a create → update → delete user cycle.
+  - `test/e2e-user-access-groups.spec.js` creates a temporary user, assigns a group, toggles group/user timezone mode, and deletes the user.
   - `test/e2e-unlock-groups.spec.js` writes one temporary unlock combination, verifies readback, and restores the original config.
   They are skipped automatically unless the required environment variables are provided.
 
@@ -265,6 +283,8 @@ Additional environment variables:
 - `ZKLIB_E2E_TIMEOUT` to override Mocha’s timeout for the e2e suite (default 45000 ms).
 - `ZKLIB_E2E_CONNECTION_TYPE` to use `udp` or `tcp` for e2e specs (default `udp`).
 - `ZKLIB_E2E_USER_PACKET_SIZE=28` to force compact user writes during the user lifecycle e2e, useful for compact TCP devices.
+- `ZKLIB_E2E_USER_ACCESS_GROUPS=1` to enable the user group/timezone mutation e2e.
+- `ZKLIB_E2E_ACCESS_UID`, `ZKLIB_E2E_ACCESS_GROUP`, and `ZKLIB_E2E_ACCESS_TIMEZONE` to choose the temporary user/group/timezone for that e2e (defaults: uid 242, group 1, timezone 1).
 - `ZKLIB_E2E_UNLOCK_GROUPS=1` to enable the unlock-groups mutation e2e.
 - `ZKLIB_E2E_UNLOCK_COMBINATION` and `ZKLIB_E2E_UNLOCK_GROUP` to choose the temporary unlock combination/group (defaults: combination 2, group 1).
 

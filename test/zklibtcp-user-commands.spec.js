@@ -119,12 +119,16 @@ describe('ZKLibTCP user management helpers', () => {
 
   it('reads user timezones with the full uid payload', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    const readReply = Buffer.alloc(8 + 8);
-    readReply.writeUInt16LE(1, 8);
+    const readReply = Buffer.concat([
+      Buffer.alloc(8),
+      Buffer.from('0100000001000000', 'hex')
+    ]);
     const executeStub = sinon.stub(zk, 'executeCmd').resolves(readReply);
 
     const res = await zk.getUserTimezones(1111);
-    expect(res.useGroupTimezones).to.equal(true);
+    expect(res.useUserTimezones).to.equal(true);
+    expect(res.useGroupTimezones).to.equal(false);
+    expect(res.timezones).to.deep.equal([1, 0, 0]);
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_USERTZ_RRQ);
     expect(executeStub.firstCall.args[1].readUInt32LE(0)).to.equal(1111);
   });

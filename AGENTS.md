@@ -59,7 +59,10 @@ User/Group Timezones
 - `encodeUserTimezoneInfo({ uid, useUserTimezones|useGroupTimezones, timezones })`
   - 20 bytes: `uid(u32)`, `flag(u32)`, `tz1(u32)`, `tz2(u32)`, `tz3(u32)`.
   - `flag=1` means use per-user timezones; `0` means use group timezones.
-- `decodeUserTimezoneInfo(data)` returns `{ useGroupTimezones, timezones }` with 16-bit semantics.
+- `decodeUserTimezoneInfo(data)` returns `{ timezoneFlag, useUserTimezones, useGroupTimezones, timezones }`.
+  - It supports legacy 16-bit replies and compact 32-bit replies.
+  - `flag=1` means user-level timezones; `0`, `0xfffffffe`, and similar non-1 values mean group-inherited timezones.
+  - Sentinel slots like `0xffff` / `0xfffffffe` are normalized to `0`.
 - `encodeGroupTimezoneInfo({ group, timezones|tz1..tz3, verifyStyle, holiday })`
   - 8 bytes: `group(u8)`, `tz1(u16)`, `tz2(u16)`, `tz3(u16)`, `verify+holiday(u8)` (B7=holiday, B6..B0=verify style).
   - Quirk: some firmwares return `256` for tz `1` (endianness artifact). Consumers can normalize (e.g., map exact multiples of 256 to value/256) if needed.
