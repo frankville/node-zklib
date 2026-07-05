@@ -139,4 +139,36 @@ describe('ZKLibUDP timezone and access helpers', () => {
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_ULG_WRQ);
     expect(executeStub.firstCall.args[1].toString('ascii')).to.equal('1:::::::::\0');
   });
+
+  it('rejects empty unlock group collection writes', async () => {
+    const zk = new ZKLibUDP('127.0.0.1', 4370, 1000, 5500);
+    let error = null;
+
+    try {
+      await zk.setUnlockGroups({});
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).to.be.instanceOf(Error);
+    expect(error.message).to.match(/non-empty array/);
+  });
+
+  it('updates ASCII unlock group configuration after detecting compact format', async () => {
+    const zk = new ZKLibUDP('127.0.0.1', 4370, 1000, 5500);
+    const readReply = Buffer.concat([
+      Buffer.alloc(8),
+      Buffer.from('1:::::::::\0', 'ascii')
+    ]);
+    const executeStub = sinon.stub(zk, 'executeCmd');
+    executeStub.onFirstCall().resolves(readReply);
+    executeStub.onSecondCall().resolves(readReply);
+    executeStub.onThirdCall().resolves(Buffer.alloc(0));
+
+    await zk.getUnlockGroups();
+    await zk.setUnlockGroup({ combination: 2, groups: [1] });
+
+    expect(executeStub.thirdCall.args[0]).to.equal(COMMANDS.CMD_ULG_WRQ);
+    expect(executeStub.thirdCall.args[1].toString('ascii')).to.equal('1:1::::::::\0');
+  });
 });

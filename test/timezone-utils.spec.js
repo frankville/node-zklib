@@ -145,6 +145,14 @@ describe('Timezone encoding helpers', () => {
     expect(groupMode.timezones).to.deep.equal([1, 0, 0]);
   });
 
+  it('does not misclassify legacy 16-bit user timezone replies as compact 32-bit', () => {
+    const decoded = decodeUserTimezoneInfo(Buffer.from([1, 0, 0, 0, 2, 0, 3, 0]));
+    expect(decoded.timezoneFlag).to.equal(1);
+    expect(decoded.useUserTimezones).to.equal(true);
+    expect(decoded.useGroupTimezones).to.equal(false);
+    expect(decoded.timezones).to.deep.equal([0, 2, 3]);
+  });
+
   it('encodes user timezone structure for group usage', () => {
     const buffer = encodeUserTimezoneInfo({
       uid: 11,
@@ -240,6 +248,15 @@ describe('Timezone encoding helpers', () => {
     });
   });
 
+  it('accepts a single numeric unlock group but rejects malformed group lists', () => {
+    const single = encodeUnlockGroupInfo({ combination: 1, groups: 2 });
+    expect(single.readUInt8(1)).to.equal(2);
+    expect(single.readUInt16LE(6)).to.equal(1);
+
+    expect(() => encodeUnlockGroupInfo({ combination: 1, groups: '1,2' }))
+      .to.throw(/groups must be an array/);
+  });
+
   it('decodes ASCII unlock group strings returned by compact devices', () => {
     const decoded = decodeUnlockGroupsInfo(Buffer.from('1:::::::::\0', 'ascii'));
 
@@ -254,6 +271,13 @@ describe('Timezone encoding helpers', () => {
     expect(second.validGroups).to.equal(0);
   });
 
+  it('does not misclassify binary unlock groups as ASCII', () => {
+    const binary = Buffer.from([1, 0x31, 0x3A, 0x32, 0, 0, 2, 0]);
+    const decoded = decodeUnlockGroupInfo(binary, 1);
+    expect(decoded.format).to.equal('binary');
+    expect(decoded.groups).to.deep.equal([0x31, 0x3A, 0x32, 0, 0]);
+  });
+
   it('encodes ASCII unlock group strings for compact devices', () => {
     const buffer = encodeUnlockGroupsInfo({
       combinations: [
@@ -263,5 +287,12 @@ describe('Timezone encoding helpers', () => {
     });
 
     expect(buffer.toString('ascii')).to.equal('1::2,4:::::::\0');
+  });
+
+  it('rejects empty or malformed unlock-group collection writes', () => {
+    expect(() => encodeUnlockGroupsInfo({})).to.throw(/non-empty array/);
+    expect(() => encodeUnlockGroupsInfo({ combinations: [] })).to.throw(/non-empty array/);
+    expect(() => encodeUnlockGroupsInfo({ combinations: [{ combination: 1, groups: '1,2' }] }))
+      .to.throw(/groups must be an array/);
   });
 });

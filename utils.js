@@ -137,13 +137,14 @@ module.exports.decodeUserData28 = (userData)=>{
         .toString('ascii')
         .split('\0')
         .shift(),
-      name: userData
-        .slice(8,8+8)
-        .toString('ascii')
-        .split('\0')
-        .shift(),
-      userId: userData.readUIntLE(24,4)
-    };
+	      name: userData
+	        .slice(8,8+8)
+	        .toString('ascii')
+	        .split('\0')
+	        .shift(),
+	      compactData: Buffer.from(userData.subarray(16, 24)),
+	      userId: userData.readUIntLE(24,4)
+	    };
     return user;
 }
 
@@ -154,7 +155,8 @@ module.exports.decodeUserData72 = (userData)=>{
         userData.readUIntLE(42, 2),
         userData.readUIntLE(44, 2),
         userData.readUIntLE(46, 2)
-    ];
+    ].map(normalizeTimezoneSlot);
+    const useUserTimezones = userTimezoneFlag === 1;
     const user = {
         uid: userData.readUIntLE(0, 2),
         role: permissionToken,
@@ -173,7 +175,8 @@ module.exports.decodeUserData72 = (userData)=>{
         cardNumber: userData.readUIntLE(35,4),
         groupNumber: userData.readUIntLE(39,1),
         userTimezoneFlag,
-        useGroupTimezones: userTimezoneFlag === 0,
+        useUserTimezones,
+        useGroupTimezones: !useUserTimezones,
         timezones,
         userId: userData
           .slice(48, 48+9)
@@ -233,6 +236,58 @@ const ROLE_NAME_TO_VALUE = {
     superadmin: 7
 };
 
+const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+const resolveRoleValue = (options = {}) => {
+    if (typeof options.role === 'string') {
+        return ROLE_NAME_TO_VALUE[options.role.toLowerCase().trim()] ?? 0;
+    }
+    if (typeof options.roleName === 'string') {
+        return ROLE_NAME_TO_VALUE[options.roleName.toLowerCase().trim()] ?? 0;
+    }
+    if (options.role !== undefined && options.role !== null) {
+        const numericRole = Number(options.role);
+        if (
+            Number.isFinite(numericRole) &&
+            (
+                options.permissionToken === undefined ||
+                options.permissionToken === null ||
+                numericRole !== (options.permissionToken & 0xFF)
+            )
+        ) {
+            return numericRole;
+        }
+    }
+    if (options.roleValue !== undefined && options.roleValue !== null) {
+        return Number(options.roleValue) || 0;
+    }
+    if (options.permissionToken !== undefined && options.permissionToken !== null) {
+        return decodePermissionToken(options.permissionToken).roleValue;
+    }
+    return 0;
+};
+
+const resolvePermissionToken = (options = {}) => {
+    const hasSemanticPermission = ['role', 'roleName', 'roleValue', 'enabled']
+        .some(key => hasOwn(options, key));
+    if (
+        options.permissionToken !== undefined &&
+        options.permissionToken !== null &&
+        !hasSemanticPermission
+    ) {
+        return options.permissionToken & 0xFF;
+    }
+
+    const roleValue = resolveRoleValue(options);
+    const enabled = options.enabled !== undefined && options.enabled !== null
+        ? options.enabled !== false
+        : options.permissionToken !== undefined && options.permissionToken !== null
+            ? decodePermissionToken(options.permissionToken).enabled
+            : true;
+
+    return buildPermissionToken(roleValue, enabled);
+};
+
 const toUInt16 = (value, fallback = 0) => {
     if (value === undefined || value === null || Number.isNaN(Number(value))) {
         return fallback;
@@ -271,17 +326,7 @@ module.exports.encodeUserInfo72 = (options = {}) => {
 
     payload.writeUInt16LE(toUInt16(options.uid), 0);
 
-    let permissionToken;
-    if (options.permissionToken !== undefined && options.permissionToken !== null) {
-        permissionToken = options.permissionToken & 0xFF;
-    } else {
-        let roleValue = options.role;
-        if (typeof roleValue === 'string') {
-            roleValue = ROLE_NAME_TO_VALUE[roleValue.toLowerCase().trim()] ?? 0;
-        }
-        permissionToken = buildPermissionToken(Number(roleValue) || 0, options.enabled !== false);
-    }
-    payload.writeUInt8(permissionToken, 2);
+    payload.writeUInt8(resolvePermissionToken(options), 2);
 
     writeAsciiField(payload, options.password || '', 3, 8);
     writeAsciiField(payload, options.name || '', 11, 24);
@@ -290,13 +335,19 @@ module.exports.encodeUserInfo72 = (options = {}) => {
     payload.writeUInt8(toUInt16(options.groupNumber ?? options.group ?? 1) & 0xFF, 39);
 
     const explicitTzFlag = options.userTimezoneFlag;
-    const useGroupTimezones = options.useGroupTimezones;
-    const tzFlag = explicitTzFlag !== undefined && explicitTzFlag !== null
+    const timezones = Array.isArray(options.timezones) ? options.timezones : [];
+    const hasTimezoneMode = hasOwn(options, 'useUserTimezones') ||
+        hasOwn(options, 'useGroupTimezones');
+    const useUserTimezones = hasOwn(options, 'useGroupTimezones')
+        ? !options.useGroupTimezones
+        : hasOwn(options, 'useUserTimezones')
+            ? !!options.useUserTimezones
+            : timezones.some(timezone => Number(timezone) > 0);
+    const tzFlag = explicitTzFlag !== undefined && explicitTzFlag !== null && !hasTimezoneMode
         ? toUInt16(explicitTzFlag)
-        : (useGroupTimezones === false || (options.timezones && options.timezones.length > 0) ? 1 : 0);
+        : (useUserTimezones ? 1 : 0);
     payload.writeUInt16LE(tzFlag, 40);
 
-    const timezones = Array.isArray(options.timezones) ? options.timezones : [];
     payload.writeUInt16LE(toUInt16(timezones[0] ?? 0), 42);
     payload.writeUInt16LE(toUInt16(timezones[1] ?? 0), 44);
     payload.writeUInt16LE(toUInt16(timezones[2] ?? 0), 46);
@@ -316,20 +367,15 @@ module.exports.encodeUserInfo28 = (options = {}) => {
 
     payload.writeUInt16LE(toUInt16(options.uid), 0);
 
-    let permissionToken;
-    if (options.permissionToken !== undefined && options.permissionToken !== null) {
-        permissionToken = options.permissionToken & 0xFF;
-    } else {
-        let roleValue = options.role;
-        if (typeof roleValue === 'string') {
-            roleValue = ROLE_NAME_TO_VALUE[roleValue.toLowerCase().trim()] ?? 0;
-        }
-        permissionToken = buildPermissionToken(Number(roleValue) || 0, options.enabled !== false);
-    }
-    payload.writeUInt8(permissionToken, 2);
+    payload.writeUInt8(resolvePermissionToken(options), 2);
 
     writeAsciiField(payload, options.password || '', 3, 5);
     writeAsciiField(payload, options.name || '', 8, 8);
+
+    const compactData = options.compactData || options.rawAccessData || options.reserved;
+    if (Buffer.isBuffer(compactData)) {
+        compactData.copy(payload, 16, 0, Math.min(compactData.length, 8));
+    }
 
     const userIdValue = toUInt32(
         options.userId ?? options.userid ?? options.uid,
@@ -366,6 +412,13 @@ const normalizeTimezoneSlot = (value) => {
     }
     return value;
 };
+
+const isPlausibleCompactTimezoneValue = (value) => (
+    value <= 100 ||
+    value === 0xFFFF ||
+    value === 0xFFFFFFFE ||
+    value === 0xFFFFFFFF
+);
 
 const fixedNumberArray = (values, length, byteSized = false) => {
     const normalized = [];
@@ -533,18 +586,24 @@ module.exports.decodeUserTimezoneInfo = (data) => {
     }
 
     const compactFlag = data.readUInt32LE(0);
-    const isCompact32Bit = compactFlag === 0 ||
+    const maybeCompact32Bit = compactFlag === 0 ||
         compactFlag === 1 ||
         compactFlag === 0xFFFFFFFE ||
         compactFlag === 0xFFFFFFFF;
+    const compactSlots = [];
+    if (maybeCompact32Bit) {
+        for (let offset = 4; offset + 4 <= data.length && compactSlots.length < 3; offset += 4) {
+            compactSlots.push(data.readUInt32LE(offset));
+        }
+    }
+    const isCompact32Bit = maybeCompact32Bit &&
+        compactSlots.every(isPlausibleCompactTimezoneValue);
 
     const flag = isCompact32Bit ? compactFlag : data.readUInt16LE(0);
     const timezones = [];
 
     if (isCompact32Bit) {
-        for (let offset = 4; offset + 4 <= data.length && timezones.length < 3; offset += 4) {
-            timezones.push(data.readUInt32LE(offset));
-        }
+        timezones.push(...compactSlots);
     } else {
         for (let offset = 2; offset + 2 <= data.length && timezones.length < 3; offset += 2) {
             timezones.push(data.readUInt16LE(offset));
@@ -624,6 +683,19 @@ const normalizeUnlockPayload = (data) => {
 
 const activeUnlockGroups = (groups) => groups.filter(group => group > 0);
 
+const normalizeUnlockGroupsInput = (groups, context) => {
+    if (groups === undefined || groups === null) {
+        return [];
+    }
+    if (Array.isArray(groups)) {
+        return fixedNumberArray(groups, 5, true);
+    }
+    if (typeof groups === 'number') {
+        return fixedNumberArray([groups], 5, true);
+    }
+    throw new Error(`${context}: groups must be an array of group numbers`);
+};
+
 const unlockGroupFromValues = (combination, groups, validGroups, format = 'binary', raw = undefined) => {
     const fixedGroups = fixedNumberArray(groups, 5, true);
     const activeGroups = activeUnlockGroups(fixedGroups);
@@ -650,8 +722,26 @@ const parseUnlockAsciiToken = (token) => {
 
 const looksLikeUnlockAscii = (payload) => {
     if (!payload.length) return false;
-    const text = payload.toString('ascii').replace(/\0+$/g, '');
-    return text.includes(':') && /^[0-9:,+&\-\s]*$/.test(text);
+    let end = payload.indexOf(0);
+    if (end === -1) end = payload.length;
+    if (end === 0) return false;
+    const body = payload.subarray(0, end);
+    let hasColon = false;
+    for (const byte of body) {
+        if (byte === 0x3A) hasColon = true;
+        const allowed = (byte >= 0x30 && byte <= 0x39) ||
+            byte === 0x3A ||
+            byte === 0x2C ||
+            byte === 0x2B ||
+            byte === 0x26 ||
+            byte === 0x2D ||
+            byte === 0x20 ||
+            byte === 0x09 ||
+            byte === 0x0A ||
+            byte === 0x0D;
+        if (!allowed) return false;
+    }
+    return hasColon;
 };
 
 module.exports.encodeUnlockGroupInfo = (options = {}) => {
@@ -662,18 +752,22 @@ module.exports.encodeUnlockGroupInfo = (options = {}) => {
     if (combination === undefined || combination === null) {
         throw new Error('encodeUnlockGroupInfo: combination is required');
     }
+    const combinationValue = toUInt16(combination);
+    if (combinationValue < 1 || combinationValue > 10) {
+        throw new Error('encodeUnlockGroupInfo: combination must be between 1 and 10');
+    }
 
-    const groups = options.groups || [
+    const groups = options.groups !== undefined ? options.groups : [
         options.group1,
         options.group2,
         options.group3,
         options.group4,
         options.group5
     ];
-    const fixedGroups = fixedNumberArray(groups, 5, true);
+    const fixedGroups = normalizeUnlockGroupsInput(groups, 'encodeUnlockGroupInfo');
     const validGroups = options.validGroups ?? activeUnlockGroups(fixedGroups).length;
 
-    buffer.writeUInt8(toUInt16(combination) & 0xFF, 0);
+    buffer.writeUInt8(combinationValue & 0xFF, 0);
     fixedGroups.forEach((group, index) => buffer.writeUInt8(group, 1 + index));
     buffer.writeUInt16LE(toUInt16(validGroups), 6);
 
@@ -687,19 +781,29 @@ module.exports.encodeUnlockGroupsInfo = (options = {}) => {
 
     const source = Array.isArray(options)
         ? options
-        : (options.combinations || options.unlockGroups || []);
+        : (options.combinations ?? options.unlockGroups);
+    if (!Array.isArray(source) || source.length === 0) {
+        throw new Error('encodeUnlockGroupsInfo: combinations must be a non-empty array');
+    }
     const slots = Array(10).fill('');
 
     source.forEach((entry, index) => {
+        if (!entry || typeof entry !== 'object' || Buffer.isBuffer(entry)) {
+            throw new Error('encodeUnlockGroupsInfo: each combination must be an object');
+        }
         const combination = entry.combination ?? entry.combinationNumber ?? entry.combNo ?? entry.index ?? (index + 1);
-        const slotIndex = clamp(combination, 1, 10) - 1;
-        const groups = fixedNumberArray(entry.groups || [
+        const combinationValue = toUInt16(combination);
+        if (combinationValue < 1 || combinationValue > 10) {
+            throw new Error('encodeUnlockGroupsInfo: combination must be between 1 and 10');
+        }
+        const slotIndex = combinationValue - 1;
+        const groups = normalizeUnlockGroupsInput(entry.groups !== undefined ? entry.groups : [
             entry.group1,
             entry.group2,
             entry.group3,
             entry.group4,
             entry.group5
-        ], 5, true);
+        ], 'encodeUnlockGroupsInfo');
         slots[slotIndex] = activeUnlockGroups(groups).join(',');
     });
 

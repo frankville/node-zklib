@@ -76,7 +76,8 @@ Unlock Groups / Combinations
 - `encodeUnlockGroupInfo({ combination, groups, validGroups })` → 8 bytes: `combination(u8)`, 5 group slots (`u8`), `validGroups(u16)`.
 - `decodeUnlockGroupInfo(data, fallbackCombination)` handles the binary 8-byte form and compact ASCII forms.
 - `decodeUnlockGroupsInfo(data)` returns `{ format, combinations }`; compact devices may return ASCII like `1:::::::::` representing all 10 combinations in one string.
-- `setUnlockGroups({ combinations })` writes the compact ASCII form; `setUnlockGroup(info)` writes one binary combination.
+- `setUnlockGroups({ combinations })` writes the compact ASCII form and rejects empty/malformed collection writes to avoid accidental wipe-all payloads; raw ASCII strings remain an explicit escape hatch.
+- `setUnlockGroup(info)` writes one binary combination unless a prior read detected compact ASCII unlock groups; in that case it updates the full ASCII configuration.
 
 Realtime Events
 - UDP: `getRealTimeLogs(cb)` registers for realtime frames.

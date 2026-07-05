@@ -252,6 +252,7 @@ Timezone notes:
 Unlock group notes:
 - A user can belong to one group, that group can have timezones, and unlock combinations decide which groups can actually release the door.
 - Binary unlock combinations have 5 group slots plus `validGroups`. Compact devices may return one ASCII string for all 10 combinations, such as `1:::::::::` for “combination 1 uses group 1”.
+- `setUnlockGroups({ combinations })` requires a non-empty `combinations` array. Empty or malformed objects are rejected so apps do not accidentally write `:::::::::` and clear all unlock combinations. To intentionally write raw compact ASCII, pass the string explicitly.
 
 ## Tests
 

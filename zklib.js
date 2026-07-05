@@ -16,7 +16,13 @@ class ZKLib {
             comm_code = 0
         }
 
-        this.connectionType = connType === 'tcp' ? 'tcp' : 'udp';
+        const normalizedConnectionType = connType === undefined || connType === null
+            ? 'udp'
+            : connType.toString().toLowerCase();
+        if (normalizedConnectionType !== 'tcp' && normalizedConnectionType !== 'udp') {
+            throw new Error('connectionType must be either "udp" or "tcp"');
+        }
+        this.connectionType = normalizedConnectionType;
         this.logger = createLogger({
             level: options.logLevel,
             logger: options.logger,

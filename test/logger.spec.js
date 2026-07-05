@@ -174,6 +174,16 @@ describe('ZKLib logger integration', () => {
     assert.strictEqual(zk.zklibUdp.inport, 5510);
   });
 
+  it('normalizes connection type casing and rejects invalid values', () => {
+    const tcp = new ZKLib('127.0.0.1', 4370, 1000, 'TCP');
+    assert.strictEqual(tcp.connectionType, 'tcp');
+
+    assert.throws(
+      () => new ZKLib('127.0.0.1', 4370, 1000, 'tcpo'),
+      /connectionType must be either/
+    );
+  });
+
   it('passes user packet size options to the tcp transport', () => {
     const zk = new ZKLib('127.0.0.1', 4370, 1000, 'tcp', undefined, 0, {
       userPacketSize: 28,

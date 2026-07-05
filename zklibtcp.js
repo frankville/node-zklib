@@ -546,9 +546,11 @@ class ZKLibTCP {
     }
 
 
-    const userData = data.data.subarray(4)
-    const decoded = decodeTCPUserRecords(userData)
-    this.userPacketSize = decoded.packetSize
+	    const userData = data.data.subarray(4)
+	    const decoded = decodeTCPUserRecords(userData)
+	    if (decoded.users.length > 0 || !this.userPacketSize) {
+	      this.userPacketSize = decoded.packetSize
+	    }
     
     return { data: decoded.users, err: data.err }
   }
@@ -654,12 +656,19 @@ class ZKLibTCP {
     return await this.executeCmd(COMMANDS.CMD_CLEAR_ATTLOG, '')
   }
 
-  async setUser(userInfo = {}) {
-    const useLegacyPacket = userInfo &&
-      (userInfo.packetSize === 28 || userInfo.format === 'legacy' || this.userPacketSize === USER_PACKET_SIZE_28);
-    const encoder = useLegacyPacket ? encodeUserInfo28 : encodeUserInfo72;
-    const payload = Buffer.isBuffer(userInfo) ? userInfo : encoder(userInfo);
-    return await this.executeCmd(COMMANDS.CMD_USER_WRQ, payload);
+	  async setUser(userInfo = {}) {
+	    const explicitPacketSize = userInfo && (
+	      userInfo.packetSize === USER_PACKET_SIZE_28 || userInfo.format === 'legacy'
+	        ? USER_PACKET_SIZE_28
+	        : userInfo.packetSize === USER_PACKET_SIZE_72 || userInfo.format === 'ssr'
+	          ? USER_PACKET_SIZE_72
+	          : null
+	    );
+	    const selectedPacketSize = explicitPacketSize || this.userPacketSize || USER_PACKET_SIZE_72;
+	    const useLegacyPacket = selectedPacketSize === USER_PACKET_SIZE_28;
+	    const encoder = useLegacyPacket ? encodeUserInfo28 : encodeUserInfo72;
+	    const payload = Buffer.isBuffer(userInfo) ? userInfo : encoder(userInfo);
+	    return await this.executeCmd(COMMANDS.CMD_USER_WRQ, payload);
   }
 
   async getTimezone(index) {
@@ -714,37 +723,62 @@ class ZKLibTCP {
     return await this.executeCmd(COMMANDS.CMD_USERGRP_WRQ, payload);
   }
 
-  async getUnlockGroup(combination = 1) {
-    const req = Buffer.alloc(8);
-    req.writeUInt8(toUInt32(combination) & 0xFF, 0);
-    const reply = await this.executeCmd(COMMANDS.CMD_ULG_RRQ, req);
-    const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
-    return decodeUnlockGroupInfo(data, toUInt32(combination));
-  }
+	  async getUnlockGroup(combination = 1) {
+	    const req = Buffer.alloc(8);
+	    req.writeUInt8(toUInt32(combination) & 0xFF, 0);
+	    const reply = await this.executeCmd(COMMANDS.CMD_ULG_RRQ, req);
+	    const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
+	    const decoded = decodeUnlockGroupInfo(data, toUInt32(combination));
+	    if (decoded.format === 'ascii') {
+	      this.unlockGroupsFormat = 'ascii';
+	    }
+	    return decoded;
+	  }
 
-  async setUnlockGroup(info = {}) {
-    const payload = Buffer.isBuffer(info) ? info : encodeUnlockGroupInfo(info);
-    return await this.executeCmd(COMMANDS.CMD_ULG_WRQ, payload);
-  }
+	  async setUnlockGroup(info = {}) {
+	    if (!Buffer.isBuffer(info) && this.unlockGroupsFormat === 'ascii') {
+	      const current = await this.getUnlockGroups();
+	      const combinations = current.combinations.map((combination) => ({
+	        combination: combination.combination,
+	        groups: combination.groups.filter(group => Number(group) > 0)
+	      }));
+	      const target = Number(info.combination ?? info.combinationNumber ?? info.combNo ?? info.index);
+	      if (!Number.isInteger(target) || target < 1 || target > 10) {
+	        throw new Error('setUnlockGroup: combination must be between 1 and 10');
+	      }
+	      combinations[target - 1] = {
+	        combination: target,
+	        groups: info.groups !== undefined ? info.groups : [info.group1, info.group2, info.group3, info.group4, info.group5]
+	      };
+	      return await this.setUnlockGroups({ combinations });
+	    }
+	    const payload = Buffer.isBuffer(info) ? info : encodeUnlockGroupInfo(info);
+	    return await this.executeCmd(COMMANDS.CMD_ULG_WRQ, payload);
+	  }
 
-  async getUnlockGroups() {
-    const first = await this.getUnlockGroup(1);
-    if (first.format === 'ascii' && first.raw) {
-      return decodeUnlockGroupsInfo(Buffer.from(`${first.raw}\0`, 'ascii'));
-    }
+	  async getUnlockGroups() {
+	    const first = await this.getUnlockGroup(1);
+	    if (first.format === 'ascii' && first.raw) {
+	      this.unlockGroupsFormat = 'ascii';
+	      return decodeUnlockGroupsInfo(Buffer.from(`${first.raw}\0`, 'ascii'));
+	    }
 
     const combinations = [first];
     for (let combination = 2; combination <= 10; combination++) {
       combinations.push(await this.getUnlockGroup(combination));
     }
 
-    return { format: 'binary', combinations };
-  }
+	    this.unlockGroupsFormat = 'binary';
+	    return { format: 'binary', combinations };
+	  }
 
-  async setUnlockGroups(info = {}) {
-    if (!Buffer.isBuffer(info) && (info.combination || info.combinationNumber || info.combNo || info.index)) {
-      return await this.setUnlockGroup(info);
-    }
+	  async setUnlockGroups(info = {}) {
+	    if (
+	      !Buffer.isBuffer(info) &&
+	      ['combination', 'combinationNumber', 'combNo', 'index'].some(key => Object.prototype.hasOwnProperty.call(info, key))
+	    ) {
+	      return await this.setUnlockGroup(info);
+	    }
     const payload = Buffer.isBuffer(info) ? info : encodeUnlockGroupsInfo(info);
     return await this.executeCmd(COMMANDS.CMD_ULG_WRQ, payload);
   }
