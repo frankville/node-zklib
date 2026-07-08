@@ -67,23 +67,37 @@ describe('ZKLibUDP timezone and access helpers', () => {
     expect(executeStub.secondCall.args[1].length).to.equal(20);
   });
 
-  it('reads and writes group timezones', async () => {
+  it('reads and writes group timezones with readback verification', async () => {
     const zk = new ZKLibUDP('127.0.0.1', 4370, 1000, 5500);
     const reply = Buffer.alloc(8 + 8);
     reply.writeUInt8(4, 8);
     reply.writeUInt16LE(1, 9);
+    const ackOk = Buffer.alloc(8);
+    ackOk.writeUInt16LE(COMMANDS.CMD_ACK_OK, 0);
+    const readback = Buffer.alloc(8 + 8);
+    readback.writeUInt16LE(COMMANDS.CMD_ACK_OK, 0);
+    readback.writeUInt8(4, 8);
+    readback.writeUInt16LE(2, 9);
+    readback.writeUInt16LE(3, 11);
+    readback.writeUInt16LE(0, 13);
     const executeStub = sinon.stub(zk, 'executeCmd');
-    executeStub.onFirstCall().resolves(reply);
-    executeStub.onSecondCall().resolves(Buffer.alloc(0));
+    executeStub.onCall(0).resolves(reply);
+    executeStub.onCall(1).resolves(ackOk); // CMD_GRPTZ_WRQ
+    executeStub.onCall(2).resolves(ackOk); // CMD_REFRESHDATA
+    executeStub.onCall(3).resolves(readback); // CMD_GRPTZ_RRQ readback
 
     const res = await zk.getGroupTimezones(4);
     expect(res.group).to.equal(4);
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_GRPTZ_RRQ);
     expect(executeStub.firstCall.args[1].readUInt8(0)).to.equal(4);
 
-    await zk.setGroupTimezones({ group: 4, timezones: [2, 3, 0], verifyStyle: 1, holiday: false });
+    const written = await zk.setGroupTimezones({ group: 4, timezones: [2, 3, 0], verifyStyle: 1, holiday: false });
     expect(executeStub.secondCall.args[0]).to.equal(COMMANDS.CMD_GRPTZ_WRQ);
     expect(executeStub.secondCall.args[1].length).to.equal(8);
+    expect(executeStub.thirdCall.args[0]).to.equal(COMMANDS.CMD_REFRESHDATA);
+    expect(executeStub.getCall(3).args[0]).to.equal(COMMANDS.CMD_GRPTZ_RRQ);
+    expect(written.verified).to.equal(true);
+    expect(written.timezones).to.deep.equal([2, 3, 0]);
   });
 
   it('reads and writes unlock group combinations', async () => {

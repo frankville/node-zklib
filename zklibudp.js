@@ -15,8 +15,8 @@ const {
   decodeTimezoneInfo,
   encodeUserTimezoneInfo,
   decodeUserTimezoneInfo,
-  encodeGroupTimezoneInfo,
   decodeGroupTimezoneInfo,
+  normalizeGroupTimezoneFormat,
   toUInt32,
   encodeUserGroupInfo,
   decodeUserGroupInfo,
@@ -30,6 +30,7 @@ const {
 const { MAX_CHUNK, REQUEST_DATA, COMMANDS } = require('./constants')
 
 const { log } = require('./helpers/errorLog')
+const groupTimezonesHelper = require('./helpers/groupTimezones')
 
 class ZKLibUDP {
   constructor(ip, port, timeout, inport, options = {}) {
@@ -44,6 +45,9 @@ class ZKLibUDP {
     this.keepAliveTO = 10000;
     this.openDoorDelaySec = 3;
     this.timeoutCounter = 0;
+    this.groupTimezoneFormat = normalizeGroupTimezoneFormat(
+      options.groupTimezonePacketFormat ?? options.groupTimezoneFormat
+    );
     this.logger = options.logger || createLogger({
       namespace: 'node-zklib:udp',
       baseMeta: { ip: this.ip, port: this.port, inport: this.inport, transport: 'udp' },
@@ -577,17 +581,23 @@ class ZKLibUDP {
     return await this.executeCmd(COMMANDS.CMD_USERTZ_WRQ, payload);
   }
 
-  async getGroupTimezones(group) {
+  async getGroupTimezones(group, options = {}) {
     const req = Buffer.alloc(8);
     req.writeUInt8(toUInt32(group) & 0xFF, 0);
     const reply = await this.executeCmd(COMMANDS.CMD_GRPTZ_RRQ, req);
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
-    return decodeGroupTimezoneInfo(data);
+    const decoded = decodeGroupTimezoneInfo(data, {
+      format: options.format ?? this.groupTimezoneFormat,
+      fallbackGroup: toUInt32(group)
+    });
+    if (!options.format && !this.groupTimezoneFormat && decoded.format === 'compact32') {
+      this.groupTimezoneFormat = 'compact32';
+    }
+    return decoded;
   }
 
-  async setGroupTimezones(info = {}) {
-    const payload = Buffer.isBuffer(info) ? info : encodeGroupTimezoneInfo(info);
-    return await this.executeCmd(COMMANDS.CMD_GRPTZ_WRQ, payload);
+  async setGroupTimezones(info = {}, options = {}) {
+    return await groupTimezonesHelper.setGroupTimezones(this, info, options);
   }
 
   async getUserGroup(uid) {

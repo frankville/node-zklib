@@ -259,17 +259,17 @@ class ZKLib {
         )
     }
 
-    async getGroupTimezones(group){
+    async getGroupTimezones(group, options){
         return await this.functionWrapper(
-            ()=> this.zklibTcp.getGroupTimezones(group),
-            ()=> this.zklibUdp.getGroupTimezones(group)
+            ()=> this.zklibTcp.getGroupTimezones(group, options),
+            ()=> this.zklibUdp.getGroupTimezones(group, options)
         )
     }
 
-    async setGroupTimezones(info){
+    async setGroupTimezones(info, options){
         return await this.functionWrapper(
-            ()=> this.zklibTcp.setGroupTimezones(info),
-            ()=> this.zklibUdp.setGroupTimezones(info)
+            ()=> this.zklibTcp.setGroupTimezones(info, options),
+            ()=> this.zklibUdp.setGroupTimezones(info, options)
         )
     }
 

@@ -63,10 +63,20 @@ User/Group Timezones
   - It supports legacy 16-bit replies and compact 32-bit replies.
   - `flag=1` means user-level timezones; `0`, `0xfffffffe`, and similar non-1 values mean group-inherited timezones.
   - Sentinel slots like `0xffff` / `0xfffffffe` are normalized to `0`.
-- `encodeGroupTimezoneInfo({ group, timezones|tz1..tz3, verifyStyle, holiday })`
-  - 8 bytes: `group(u8)`, `tz1(u16)`, `tz2(u16)`, `tz3(u16)`, `verify+holiday(u8)` (B7=holiday, B6..B0=verify style).
-  - Quirk: some firmwares return `256` for tz `1` (endianness artifact). Consumers can normalize (e.g., map exact multiples of 256 to value/256) if needed.
-- `decodeGroupTimezoneInfo(data)` tolerates short buffers and returns sensible defaults.
+- `encodeGroupTimezoneInfo({ group, timezones|tz1..tz3, verifyStyle, holiday, format })`
+  - Packet formats (`format`, default `legacy8`):
+    - `legacy8` — documented zk-protocol layout, 8 bytes: `group(u8)`, `tz1(u16)@1`, `tz2(u16)@3`, `tz3(u16)@5`, `verify+holiday(u8)@7` (B7=holiday, B6..B0=verify style).
+    - `uint16` — aligned-word variant, 8 bytes: `group(u16)`, `tz1(u16)`, `tz2(u16)`, `tz3(u16)`; no verify/holiday byte. **Caution:** writing this layout corrupted a group record on at least one compact TCP panel; probe it last.
+    - `compact8` — compact firmware variant. Write: `group(u32)`, `tz1(u8)`, `tz2(u8)`, `tz3(u8)`, `verify+holiday(u8)` = 8 bytes. Replies do **not** echo the group: first u32 is a found/valid flag (`1` = record follows), then the 4 record bytes; groups without a record answer just 4 zero bytes. Mirrors how the same firmware answers `CMD_USERTZ_RRQ` (flag u32 + record, uid not echoed).
+    - `compact32` — 32-bit variant, 16 bytes: `group(u32)`, `tz1(u32)`, `tz2(u32)`, `tz3(u32)`; no verify/holiday byte.
+  - Quirk: some firmwares return `256` for tz `1` (endianness artifact); the decoder normalizes exact multiples of 256 (≤50 after division) back to the index. The real compact reply `01 00 00 00 01 00 00 00` decodes to `[0,1,0]` under both `legacy8` (via that normalization) and `uint16`, but to `[1,0,0]` under `compact8`. ZKAccess ground truth on the observed panel was TZ2=1, i.e. `[0,1,0]` — so on that firmware the reply is best read as `found(u16/u32)=1` followed by `tz1(u16) tz2(u16) tz3(u16)`, and the `compact8` byte-record interpretation does not apply to reads there.
+- `decodeGroupTimezoneInfo(data, { format, fallbackGroup })` tolerates short buffers; auto-detects `compact32` from 16-byte replies, otherwise defaults to `legacy8` unless `format` is given. Returns `{ group, timezones, verifyStyle, holiday, format, raw, found, plausible }` — `raw` is the hex of the data bytes, `found=false` marks missing records, `plausible=false` flags corrupted records (group outside 1–100 or tz > 50). `compact8` replies use `fallbackGroup` as `group`.
+- `setGroupTimezones(info, options)` (both transports and the facade) performs a **verified write** by default because some firmwares reply `ACK_OK` without persisting anything:
+  - Flow: `CMD_GRPTZ_WRQ` → `CMD_REFRESHDATA` → `CMD_GRPTZ_RRQ` readback → compare timezones. On mismatch it throws `ERR_GROUP_TZ_NOT_PERSISTED` (with `.attempts` and `.expected` attached). Non-ACK write replies throw `ERR_GROUP_TZ_WRITE_REJECTED`.
+  - `options.verify=false` restores fire-and-forget (still refreshes and checks the ACK). `options.refresh=false` skips `CMD_REFRESHDATA`.
+  - `options.format` selects the packet format; `options.formats: [...]` probes several in order until one verifies (requires verify). The format that persists is cached on the transport (`groupTimezoneFormat`) and reused for later writes and decode hints.
+  - Constructor option `groupTimezonePacketFormat` (`legacy8` | `uint16` | `compact32`) pins the format up front for devices whose variant is known.
+  - Raw `Buffer` payloads pass through unverified (escape hatch).
 
 User→Group Assignment
 - `encodeUserGroupInfo({ uid, group })` → 5 bytes: `uid(u32)`, `group(u8)`.
@@ -111,6 +121,7 @@ Testing
 - E2E (optional; requires hardware):
   - Set env: `ZKLIB_E2E_IP`, `ZKLIB_E2E_PORT`, `ZKLIB_E2E_TIMEOUT`, `ZKLIB_E2E_UID` … (see repo README for specifics), then run selected e2e specs.
   - Unlock-groups e2e is mutation-gated by `ZKLIB_E2E_UNLOCK_GROUPS=1`; it writes one temporary combination and restores the original config.
+  - Group-timezones e2e is mutation-gated by `ZKLIB_E2E_GROUP_TZ=1`; it probes the packet formats listed in `ZKLIB_E2E_GROUP_TZ_FORMATS` against the spare group `ZKLIB_E2E_GROUP_TZ_GROUP` (default 5), verifies persistence via readback, and restores the original values. It fails when the device ACKs but does not persist. Point it at a group with no members.
 
 Debugging Tips
 - Diagnostic logging:
@@ -154,6 +165,7 @@ PR Checklist
 
 Known Quirks
 - Group materialization: reads for groups without members often return zeros.
+- Compact TCP panels (observed on a 192.168.x panel, fw TBD): `CMD_GRPTZ_WRQ` replies `ACK_OK` without persisting when the payload layout is wrong — never trust the ACK alone (hence verified writes). `CMD_GRPTZ_RRQ` replies are 4 zero bytes for groups without a record, and 8 bytes (`found u32` + 4 record bytes) otherwise; the group number is not echoed. A malformed 8-byte write can corrupt the stored record (readback like `01 00 00 00 70 87 65 00`, `plausible=false`); rewrite the group with correct values to repair it.
 - Wrong password attempts: commonly produce EF_ALARM `misoperation` (if enabled) rather than EF_VERIFY.
 - UDP name/password truncation: 8/5 characters; TCP SSR allows longer fields.
 - Some models honor only the low byte of `uid` for group ops.

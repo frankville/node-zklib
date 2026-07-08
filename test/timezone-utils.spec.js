@@ -204,9 +204,119 @@ describe('Timezone encoding helpers', () => {
   });
 
   it('normalizes endian-swapped group timezone slots from compact devices', () => {
+    // Real reply captured from a compact TCP panel for group 1.
     const decoded = decodeGroupTimezoneInfo(Buffer.from('0100000001000000', 'hex'));
     expect(decoded.group).to.equal(1);
     expect(decoded.timezones).to.deep.equal([0, 1, 0]);
+    expect(decoded.format).to.equal('legacy8');
+    expect(decoded.raw).to.equal('0100000001000000');
+    expect(decoded.plausible).to.equal(true);
+  });
+
+  it('decodes the real compact reply identically under the uint16 format', () => {
+    const decoded = decodeGroupTimezoneInfo(Buffer.from('0100000001000000', 'hex'), { format: 'uint16' });
+    expect(decoded.group).to.equal(1);
+    expect(decoded.timezones).to.deep.equal([0, 1, 0]);
+    expect(decoded.format).to.equal('uint16');
+    expect(decoded.plausible).to.equal(true);
+  });
+
+  it('flags implausible group timezone replies from corrupted records', () => {
+    // Real bytes read back from group 1 after a malformed raw write experiment.
+    const corrupt = Buffer.from('0100000070876500', 'hex');
+    expect(decodeGroupTimezoneInfo(corrupt).plausible).to.equal(false);
+    expect(decodeGroupTimezoneInfo(corrupt, { format: 'uint16' }).plausible).to.equal(false);
+  });
+
+  it('encodes group timezone info in the uint16 format', () => {
+    const buffer = encodeGroupTimezoneInfo({
+      group: 1,
+      timezones: [0, 1, 2],
+      format: 'uint16'
+    });
+
+    expect(buffer.length).to.equal(8);
+    expect(buffer.toString('hex')).to.equal('0100000001000200');
+    expect(buffer.readUInt16LE(0)).to.equal(1);
+    expect(buffer.readUInt16LE(2)).to.equal(0);
+    expect(buffer.readUInt16LE(4)).to.equal(1);
+    expect(buffer.readUInt16LE(6)).to.equal(2);
+  });
+
+  it('encodes and auto-decodes group timezone info in the compact32 format', () => {
+    const buffer = encodeGroupTimezoneInfo({
+      group: 1,
+      timezones: [0, 1, 2],
+      format: 'compact32'
+    });
+
+    expect(buffer.length).to.equal(16);
+    expect(buffer.readUInt32LE(0)).to.equal(1);
+    expect(buffer.readUInt32LE(4)).to.equal(0);
+    expect(buffer.readUInt32LE(8)).to.equal(1);
+    expect(buffer.readUInt32LE(12)).to.equal(2);
+
+    // 16-byte replies are detected as compact32 without a format hint.
+    const decoded = decodeGroupTimezoneInfo(buffer);
+    expect(decoded.format).to.equal('compact32');
+    expect(decoded.group).to.equal(1);
+    expect(decoded.timezones).to.deep.equal([0, 1, 2]);
+    expect(decoded.plausible).to.equal(true);
+  });
+
+  it('decodes compact8 replies as a found flag plus byte-sized record', () => {
+    // Same real capture: under compact8 the leading u32 is a found flag and the
+    // record is tz1=1, tz2=0, tz3=0, verify=0 — i.e. "group 1 uses timezone 1".
+    const decoded = decodeGroupTimezoneInfo(Buffer.from('0100000001000000', 'hex'), {
+      format: 'compact8',
+      fallbackGroup: 1
+    });
+    expect(decoded.group).to.equal(1);
+    expect(decoded.found).to.equal(true);
+    expect(decoded.timezones).to.deep.equal([1, 0, 0]);
+    expect(decoded.verifyStyle).to.equal(0);
+    expect(decoded.plausible).to.equal(true);
+  });
+
+  it('decodes 4-byte compact8 replies as missing records', () => {
+    // Real capture: groups with no record answer 4 zero bytes.
+    const decoded = decodeGroupTimezoneInfo(Buffer.from('00000000', 'hex'), {
+      format: 'compact8',
+      fallbackGroup: 5
+    });
+    expect(decoded.group).to.equal(5);
+    expect(decoded.found).to.equal(false);
+    expect(decoded.timezones).to.deep.equal([0, 0, 0]);
+  });
+
+  it('flags corrupted compact8 records as implausible', () => {
+    const decoded = decodeGroupTimezoneInfo(Buffer.from('0100000070876500', 'hex'), {
+      format: 'compact8',
+      fallbackGroup: 1
+    });
+    expect(decoded.found).to.equal(true);
+    expect(decoded.timezones).to.deep.equal([112, 135, 101]);
+    expect(decoded.plausible).to.equal(false);
+  });
+
+  it('encodes group timezone info in the compact8 format', () => {
+    const buffer = encodeGroupTimezoneInfo({
+      group: 1,
+      timezones: [0, 1, 2],
+      format: 'compact8'
+    });
+
+    expect(buffer.length).to.equal(8);
+    expect(buffer.toString('hex')).to.equal('0100000000010200');
+    expect(buffer.readUInt32LE(0)).to.equal(1);
+    expect(buffer.readUInt8(4)).to.equal(0);
+    expect(buffer.readUInt8(5)).to.equal(1);
+    expect(buffer.readUInt8(6)).to.equal(2);
+    expect(buffer.readUInt8(7)).to.equal(0);
+  });
+
+  it('rejects unknown group timezone formats', () => {
+    expect(() => encodeGroupTimezoneInfo({ group: 1, format: 'bogus' })).to.throw(/unknown group timezone packet format/);
   });
 
   it('encodes user group info', () => {

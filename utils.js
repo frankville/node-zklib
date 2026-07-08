@@ -624,18 +624,84 @@ module.exports.decodeUserTimezoneInfo = (data) => {
     };
 };
 
-module.exports.encodeGroupTimezoneInfo = (options = {}) => {
-    const buffer = Buffer.alloc(8);
-    buffer.fill(0);
+// Group timezone packet formats:
+// - 'legacy8'   (documented zk-protocol layout): group(u8) tz1(u16) tz2(u16) tz3(u16) verify+holiday(u8) = 8 bytes
+// - 'uint16'    (aligned-word variant):          group(u16) tz1(u16) tz2(u16) tz3(u16) = 8 bytes, no verify byte
+// - 'compact8'  (compact firmware variant):      write group(u32) tz1(u8) tz2(u8) tz3(u8) verify+holiday(u8) = 8 bytes;
+//                                                replies carry found(u32) instead of the group, then the same 4 record bytes,
+//                                                and shrink to 4 zero bytes when the group has no record
+// - 'compact32' (32-bit firmware variant):       group(u32) tz1(u32) tz2(u32) tz3(u32) = 16 bytes, no verify byte
+const GROUP_TZ_FORMATS = ['legacy8', 'uint16', 'compact8', 'compact32'];
 
+const normalizeGroupTimezoneFormat = (format) => {
+    if (format === undefined || format === null || format === '' || format === 'auto') {
+        return null;
+    }
+    const value = String(format).toLowerCase();
+    if (value === 'legacy8' || value === 'legacy' || value === 'documented') return 'legacy8';
+    if (value === 'uint16' || value === 'u16') return 'uint16';
+    if (value === 'compact8' || value === 'u8') return 'compact8';
+    if (value === 'compact32' || value === 'compact' || value === 'u32') return 'compact32';
+    throw new Error(`unknown group timezone packet format "${format}" (expected one of: ${GROUP_TZ_FORMATS.join(', ')})`);
+};
+
+const MAX_PLAUSIBLE_TIMEZONE_INDEX = 50;
+const MAX_PLAUSIBLE_GROUP_NUMBER = 100;
+
+const isPlausibleGroupTimezoneDecode = (group, timezones) => (
+    group >= 1 &&
+    group <= MAX_PLAUSIBLE_GROUP_NUMBER &&
+    timezones.every(tz => tz >= 0 && tz <= MAX_PLAUSIBLE_TIMEZONE_INDEX)
+);
+
+const groupTimezoneSlots = (options) => ([
+    toUInt16(options.tz1 ?? options.timezones?.[0] ?? 0),
+    toUInt16(options.tz2 ?? options.timezones?.[1] ?? 0),
+    toUInt16(options.tz3 ?? options.timezones?.[2] ?? 0)
+]);
+
+module.exports.encodeGroupTimezoneInfo = (options = {}) => {
     if (options.group === undefined || options.group === null) {
         throw new Error('encodeGroupTimezoneInfo: group is required');
     }
 
+    const format = normalizeGroupTimezoneFormat(options.format) || 'legacy8';
+    const slots = groupTimezoneSlots(options);
+
+    if (format === 'uint16') {
+        const buffer = Buffer.alloc(8);
+        buffer.writeUInt16LE(toUInt16(options.group), 0);
+        buffer.writeUInt16LE(slots[0], 2);
+        buffer.writeUInt16LE(slots[1], 4);
+        buffer.writeUInt16LE(slots[2], 6);
+        return buffer;
+    }
+
+    if (format === 'compact32') {
+        const buffer = Buffer.alloc(16);
+        buffer.writeUInt32LE(toUInt32(options.group), 0);
+        buffer.writeUInt32LE(slots[0], 4);
+        buffer.writeUInt32LE(slots[1], 8);
+        buffer.writeUInt32LE(slots[2], 12);
+        return buffer;
+    }
+
+    if (format === 'compact8') {
+        const buffer = Buffer.alloc(8);
+        buffer.writeUInt32LE(toUInt32(options.group), 0);
+        buffer.writeUInt8(slots[0] & 0xFF, 4);
+        buffer.writeUInt8(slots[1] & 0xFF, 5);
+        buffer.writeUInt8(slots[2] & 0xFF, 6);
+        const compactVerify = clamp(options.verifyStyle ?? options.verify ?? 0, 0, 0x7F);
+        buffer.writeUInt8((compactVerify & 0x7F) | (options.holiday ? 0x80 : 0x00), 7);
+        return buffer;
+    }
+
+    const buffer = Buffer.alloc(8);
     buffer.writeUInt8(toUInt16(options.group) & 0xFF, 0);
-    buffer.writeUInt16LE(toUInt16(options.tz1 ?? options.timezones?.[0] ?? 0), 1);
-    buffer.writeUInt16LE(toUInt16(options.tz2 ?? options.timezones?.[1] ?? 0), 3);
-    buffer.writeUInt16LE(toUInt16(options.tz3 ?? options.timezones?.[2] ?? 0), 5);
+    buffer.writeUInt16LE(slots[0], 1);
+    buffer.writeUInt16LE(slots[1], 3);
+    buffer.writeUInt16LE(slots[2], 5);
 
     const verify = clamp(options.verifyStyle ?? options.verify ?? 0, 0, 0x7F);
     const holiday = options.holiday ? 0x80 : 0x00;
@@ -644,31 +710,111 @@ module.exports.encodeGroupTimezoneInfo = (options = {}) => {
     return buffer;
 };
 
-module.exports.decodeGroupTimezoneInfo = (data) => {
+module.exports.decodeGroupTimezoneInfo = (data, options = {}) => {
+    const fallbackGroup = Number(options.fallbackGroup ?? 0);
+
     if (!Buffer.isBuffer(data) || data.length === 0) {
         return {
-            group: 0,
+            group: fallbackGroup,
             timezones: [0, 0, 0],
             verifyStyle: 0,
-            holiday: false
+            holiday: false,
+            format: 'legacy8',
+            raw: '',
+            found: false,
+            plausible: false
         };
     }
 
     const safeReadUInt16 = (buf, offset) => (buf.length >= offset + 2 ? buf.readUInt16LE(offset) : 0);
+    const safeReadUInt32 = (buf, offset) => (buf.length >= offset + 4 ? buf.readUInt32LE(offset) : 0);
     const safeReadUInt8 = (buf, offset, fallback = 0) => (buf.length > offset ? buf.readUInt8(offset) : fallback);
 
+    const requestedFormat = normalizeGroupTimezoneFormat(options.format);
+    const format = requestedFormat || (data.length >= 16 ? 'compact32' : 'legacy8');
+    const raw = data.toString('hex');
+
+    if (format === 'compact32') {
+        const group = safeReadUInt32(data, 0);
+        const timezones = [
+            safeReadUInt32(data, 4),
+            safeReadUInt32(data, 8),
+            safeReadUInt32(data, 12)
+        ].map(normalizeTimezoneSlot);
+        return {
+            group,
+            timezones,
+            verifyStyle: 0,
+            holiday: false,
+            format,
+            raw,
+            found: true,
+            plausible: isPlausibleGroupTimezoneDecode(group, timezones)
+        };
+    }
+
+    if (format === 'compact8') {
+        // Replies do not echo the group: first u32 is a found/valid flag and the
+        // record is 4 bytes (tz1, tz2, tz3, verify+holiday). Groups without a
+        // record answer with just 4 zero bytes.
+        const found = safeReadUInt32(data, 0) === 1 && data.length >= 8;
+        const verifyByte = safeReadUInt8(data, 7, 0);
+        const timezones = found
+            ? [safeReadUInt8(data, 4), safeReadUInt8(data, 5), safeReadUInt8(data, 6)].map(normalizeTimezoneSlot)
+            : [0, 0, 0];
+        return {
+            group: fallbackGroup,
+            timezones,
+            verifyStyle: found ? verifyByte & 0x7F : 0,
+            holiday: found ? (verifyByte & 0x80) === 0x80 : false,
+            format,
+            raw,
+            found,
+            plausible: !found || timezones.every(tz => tz >= 0 && tz <= MAX_PLAUSIBLE_TIMEZONE_INDEX)
+        };
+    }
+
+    if (format === 'uint16') {
+        const group = safeReadUInt16(data, 0);
+        const timezones = [
+            safeReadUInt16(data, 2),
+            safeReadUInt16(data, 4),
+            safeReadUInt16(data, 6)
+        ].map(normalizeTimezoneSlot);
+        return {
+            group,
+            timezones,
+            verifyStyle: 0,
+            holiday: false,
+            format,
+            raw,
+            found: true,
+            plausible: isPlausibleGroupTimezoneDecode(group, timezones)
+        };
+    }
+
     const verifyByte = safeReadUInt8(data, 7, 0);
+    const group = safeReadUInt8(data, 0, 0);
+    const timezones = [
+        safeReadUInt16(data, 1),
+        safeReadUInt16(data, 3),
+        safeReadUInt16(data, 5)
+    ].map(normalizeTimezoneSlot);
     return {
-        group: safeReadUInt8(data, 0, 0),
-        timezones: [
-            safeReadUInt16(data, 1),
-            safeReadUInt16(data, 3),
-            safeReadUInt16(data, 5)
-        ].map(normalizeTimezoneSlot),
+        group,
+        timezones,
         verifyStyle: verifyByte & 0x7F,
-        holiday: (verifyByte & 0x80) === 0x80
+        holiday: (verifyByte & 0x80) === 0x80,
+        format,
+        raw,
+        found: true,
+        plausible: isPlausibleGroupTimezoneDecode(group, timezones)
     };
 };
+
+module.exports.normalizeGroupTimezoneFormat = normalizeGroupTimezoneFormat;
+module.exports.GROUP_TZ_FORMATS = GROUP_TZ_FORMATS;
+module.exports.groupTimezoneSlots = groupTimezoneSlots;
 
 const normalizeUnlockPayload = (data) => {
     if (!Buffer.isBuffer(data)) return Buffer.alloc(0);
