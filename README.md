@@ -294,4 +294,4 @@ Additional environment variables:
 
 **Unlock group warning:** the unlock-groups e2e mutates door access rules briefly, then restores the original config in `finally`. Run it only on a lab device or a supervised test door.
 
-**User ID note:** legacy commands (notably `CMD_USERGRP_WRQ/RRQ`) only transmit the low byte of the UID. Keep test/account UIDs ≤ 255 whenever you intend to manage group membership programmatically.
+**User ID note:** `CMD_USERGRP_WRQ/RRQ` carry the full UID as a little-endian u32 (confirmed via ZKAccess capture and hardware verification on ZEM760 fw 6.60), so UIDs up to 65534 work for group membership. Use `getInfo()` to read the device's real capacities (users/fingerprints/records, plus used and available counts); groups are limited to 1–100 and timezones to 1–50 by the protocol.

@@ -17,6 +17,7 @@ const {
   decodeUserTimezoneInfo,
   decodeGroupTimezoneInfo,
   normalizeGroupTimezoneFormat,
+  decodeFreeSizes,
   toUInt32,
   encodeUserGroupInfo,
   decodeUserGroupInfo,
@@ -532,11 +533,7 @@ class ZKLibUDP {
   async getInfo() {
     const data = await this.executeCmd(COMMANDS.CMD_GET_FREE_SIZES, '')
     try {
-      return {
-        userCounts: data.readUIntLE(24, 4),
-        logCounts: data.readUIntLE(40, 4),
-        logCapacity: data.readUIntLE(72, 4)
-      }
+      return decodeFreeSizes(data)
     } catch (err) {
       return Promise.reject(err)
     }
@@ -614,7 +611,7 @@ class ZKLibUDP {
 
   async getUserGroup(uid) {
     const req = Buffer.alloc(4);
-    req.writeUInt8(toUInt32(uid) & 0xFF, 0);
+    req.writeUInt32LE(toUInt32(uid), 0);
     const reply = await this.executeCmd(COMMANDS.CMD_USERGRP_RRQ, req);
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
     return decodeUserGroupInfo(data);

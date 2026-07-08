@@ -136,12 +136,11 @@ describe('ZKLibTCP user management helpers', () => {
     const res = await zk.getUserGroup(271);
     expect(res.group).to.equal(4);
     expect(executeStub.getCall(0).args[0]).to.equal(COMMANDS.CMD_USERGRP_RRQ);
-    expect(executeStub.getCall(0).args[1].readUInt8(0)).to.equal(15);
-    expect(executeStub.getCall(0).args[1].readUInt8(1)).to.equal(0);
+    expect(executeStub.getCall(0).args[1].readUInt32LE(0)).to.equal(271);
 
-    await zk.setUserGroup({ uid: 15, group: 6 });
+    await zk.setUserGroup({ uid: 271, group: 6 });
     expect(executeStub.getCall(1).args[0]).to.equal(COMMANDS.CMD_USERGRP_WRQ);
-    expect(executeStub.getCall(1).args[1].readUInt8(0)).to.equal(15 & 0xFF);
+    expect(executeStub.getCall(1).args[1].readUInt32LE(0)).to.equal(271);
     expect(executeStub.getCall(1).args[1].readUInt8(4)).to.equal(6);
   });
 

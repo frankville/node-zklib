@@ -541,7 +541,10 @@ module.exports.encodeUserGroupInfo = (options = {}) => {
         throw new Error('encodeUserGroupInfo: uid is required');
     }
 
-    buffer.writeUInt8(toUInt32(options.uid) & 0xFF, 0);
+    // Full u32 uid: a ZKAccess capture (ZEM760 fw 6.60) shows CMD_USERGRP_WRQ
+    // carrying uid 1234 as a little-endian u32 — truncating to one byte would
+    // silently target the wrong user for uids above 255.
+    buffer.writeUInt32LE(toUInt32(options.uid), 0);
     buffer.writeUInt8(toUInt16(options.group ?? options.groupNumber ?? 1) & 0xFF, 4);
 
     return buffer;
@@ -855,6 +858,33 @@ module.exports.decodeGroupTimezoneInfo = (data, options = {}) => {
         raw,
         found: true,
         plausible: isPlausibleGroupTimezoneDecode(group, timezones)
+    };
+};
+
+// CMD_GET_FREE_SIZES reply: 8-byte header + 20 little-endian u32 words.
+// Word layout (verified against a ZEM760 fw 6.60 and matching pyzk's
+// read_sizes): 4=users, 6=fingerprints, 8=attendance records, 12=cards,
+// 14=fingerprint capacity, 15=user capacity, 16=record capacity,
+// 17=fingerprints available, 18=users available, 19=records available.
+module.exports.decodeFreeSizes = (reply) => {
+    const word = (index) => {
+        const offset = 8 + index * 4;
+        return Buffer.isBuffer(reply) && reply.length >= offset + 4
+            ? reply.readUInt32LE(offset)
+            : null;
+    };
+
+    return {
+        userCounts: word(4),
+        logCounts: word(8),
+        logCapacity: word(16),
+        fingerCounts: word(6),
+        cardCounts: word(12),
+        userCapacity: word(15),
+        fingerCapacity: word(14),
+        userAvailable: word(18),
+        fingerAvailable: word(17),
+        logAvailable: word(19)
     };
 };
 

@@ -40,7 +40,7 @@ User Encoding
   - `name`: ASCII only, padded with `\0`; UDP 8 chars; TCP 24 chars.
   - `password`: ASCII; UDP 5 chars; TCP 8 chars.
   - `userId` (device user-id): UDP path is 32-bit numeric (falls back to `uid`), TCP is 9-byte ASCII.
-  - `uid`: 16-bit LE. Some models only honor the low byte for group-related ops; prefer `uid <= 255` when setting/getting group.
+  - `uid`: 16-bit LE (1–65534 usable). Group ops (`CMD_USERGRP_RRQ/WRQ`) carry the **full uid as u32** — a ZKAccess capture on ZEM760 fw 6.60 shows `d2040000 02` for uid 1234 → group 2, and full-uid reads were verified on hardware. (An earlier encoder bug truncated the uid to one byte here; the old "keep uid ≤ 255 for group ops" advice stemmed from that bug, not from the protocol.)
   - `groupNumber` (1–100), `cardNumber` (u32), `enabled` and `role` encoded into a `permissionToken`.
   - Timezone flags for SSR (72B): `userTimezoneFlag`, `useGroupTimezones`, and per-user `timezones` (3 slots).
 - Decoders: `decodeUserData28`, `decodeUserData72`.
@@ -175,7 +175,7 @@ Known Quirks
   - Reads can return a stale copy of the previous reply for a different group (a missing group echoed the prior group's record until a disable/enable + refresh cycle); re-read in a different order before trusting a surprising value.
 - Wrong password attempts: commonly produce EF_ALARM `misoperation` (if enabled) rather than EF_VERIFY.
 - UDP name/password truncation: 8/5 characters; TCP SSR allows longer fields.
-- Some models honor only the low byte of `uid` for group ops.
+- Device capacity limits: read live via `getInfo()` (`CMD_GET_FREE_SIZES`) — returns counts, capacities, and available slots for users, fingerprints, and attendance records (the observed ZEM760 reports 10,000 users / 3,000 fingerprints / 50,000 records). Groups (1–100) and timezones (1–50) are fixed protocol ranges not reported by the device; enforce them in callers.
 
 Contact/Safety
 - Changes here affect device IO. Favor minimal, well‑tested patches and add tests. Consider pinning by commit in consumers for reproducibility.

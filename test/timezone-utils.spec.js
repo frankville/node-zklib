@@ -14,7 +14,8 @@ const {
   encodeUnlockGroupInfo,
   decodeUnlockGroupInfo,
   encodeUnlockGroupsInfo,
-  decodeUnlockGroupsInfo
+  decodeUnlockGroupsInfo,
+  decodeFreeSizes
 } = require('../utils');
 
 describe('Timezone encoding helpers', () => {
@@ -366,13 +367,15 @@ describe('Timezone encoding helpers', () => {
     expect(() => encodeGroupTimezoneInfo({ group: 1, format: 'bogus' })).to.throw(/unknown group timezone packet format/);
   });
 
-  it('encodes user group info', () => {
+  it('encodes user group info with the full u32 uid', () => {
+    // Pinned from a ZKAccess capture (ZEM760 fw 6.60): CMD_USERGRP_WRQ for
+    // uid 1234 → group 2 is d2040000 02 — the uid must not be truncated.
+    const captured = encodeUserGroupInfo({ uid: 1234, group: 2 });
+    expect(captured.toString('hex')).to.equal('d204000002');
+
     const buffer = encodeUserGroupInfo({ uid: 266, group: 7 });
     expect(buffer.length).to.equal(5);
-    expect(buffer.readUInt8(0)).to.equal(10);
-    expect(buffer.readUInt8(1)).to.equal(0);
-    expect(buffer.readUInt8(2)).to.equal(0);
-    expect(buffer.readUInt8(3)).to.equal(0);
+    expect(buffer.readUInt32LE(0)).to.equal(266);
     expect(buffer.readUInt8(4)).to.equal(7);
 
     const decoded = decodeUserGroupInfo(Buffer.from([7]));
@@ -382,6 +385,33 @@ describe('Timezone encoding helpers', () => {
   it('returns group 0 for empty user group replies', () => {
     const decoded = decodeUserGroupInfo(Buffer.alloc(0));
     expect(decoded.group).to.equal(0);
+  });
+
+  it('decodes device free sizes including capacities', () => {
+    // Real CMD_GET_FREE_SIZES reply from a ZEM760 fw 6.60 (8-byte header + 80 bytes).
+    const reply = Buffer.concat([
+      Buffer.alloc(8),
+      Buffer.from(
+        '00000000000000000000000000000000020000000000000000000000000000000700000000000000' +
+        '08000000000000000000000002000000b80b00001027000050c30000b80b00000e27000049c30000',
+        'hex'
+      )
+    ]);
+
+    const sizes = decodeFreeSizes(reply);
+    expect(sizes.userCounts).to.equal(2);
+    expect(sizes.userCapacity).to.equal(10000);
+    expect(sizes.userAvailable).to.equal(9998);
+    expect(sizes.fingerCounts).to.equal(0);
+    expect(sizes.fingerCapacity).to.equal(3000);
+    expect(sizes.fingerAvailable).to.equal(3000);
+    expect(sizes.logCounts).to.equal(7);
+    expect(sizes.logCapacity).to.equal(50000);
+    expect(sizes.logAvailable).to.equal(49993);
+
+    const short = decodeFreeSizes(Buffer.alloc(8));
+    expect(short.userCounts).to.equal(null);
+    expect(short.userCapacity).to.equal(null);
   });
 
   it('encodes and decodes binary unlock group combinations', () => {
