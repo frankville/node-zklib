@@ -600,6 +600,18 @@ class ZKLibUDP {
     return await groupTimezonesHelper.setGroupTimezones(this, info, options);
   }
 
+  async getDeviceOption(name) {
+    const reply = await this.executeCmd(COMMANDS.CMD_OPTIONS_RRQ, Buffer.from(`${name}\0`, 'ascii'));
+    const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
+    const text = data.toString('ascii').replace(/\0+$/, '');
+    const separator = text.indexOf('=');
+    return separator >= 0 ? text.slice(separator + 1) : text;
+  }
+
+  async setDeviceOption(name, value) {
+    return await this.executeCmd(COMMANDS.CMD_OPTIONS_WRQ, Buffer.from(`${name}=${value}\0`, 'ascii'));
+  }
+
   async getUserGroup(uid) {
     const req = Buffer.alloc(4);
     req.writeUInt8(toUInt32(uid) & 0xFF, 0);

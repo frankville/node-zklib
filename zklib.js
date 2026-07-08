@@ -273,6 +273,20 @@ class ZKLib {
         )
     }
 
+    async getDeviceOption(name){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getDeviceOption(name),
+            ()=> this.zklibUdp.getDeviceOption(name)
+        )
+    }
+
+    async setDeviceOption(name, value){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setDeviceOption(name, value),
+            ()=> this.zklibUdp.setDeviceOption(name, value)
+        )
+    }
+
     async getUserGroup(uid){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getUserGroup(uid),

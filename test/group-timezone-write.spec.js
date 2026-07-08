@@ -148,6 +148,42 @@ transports.forEach(({ name, create }) => {
       expect(result.readback.group).to.equal(5);
     });
 
+    it('verifies compact20 writes against the ZEM760 reply shape', async () => {
+      const zk = create({ groupTimezonePacketFormat: 'compact20' });
+      const executeStub = sinon.stub(zk, 'executeCmd');
+      executeStub.onCall(0).resolves(ackOkReply());
+      executeStub.onCall(1).resolves(ackOkReply());
+      // Real ZEM760 readback: found(u32) + tz slots, group not echoed.
+      executeStub.onCall(2).resolves(ackOkReply('0100000002000000'));
+
+      const result = await zk.setGroupTimezones({ group: 2, timezones: [2, 0, 0] });
+
+      // Exact CMD_GRPTZ_WRQ payload captured from a ZKAccess sync.
+      expect(executeStub.getCall(0).args[1].toString('hex'))
+        .to.equal('0200000001000000020000000000000000000000');
+      expect(result.verified).to.equal(true);
+      expect(result.format).to.equal('compact20');
+      expect(result.timezones).to.deep.equal([2, 0, 0]);
+      expect(result.readback.group).to.equal(2);
+      expect(result.readback.found).to.equal(true);
+    });
+
+    it('reads and writes device options as ASCII key/value pairs', async () => {
+      const zk = create();
+      const executeStub = sinon.stub(zk, 'executeCmd');
+      executeStub.onCall(0).resolves(ackOkReply(Buffer.from('~Platform=ZEM760\0', 'ascii').toString('hex')));
+      executeStub.onCall(1).resolves(ackOkReply());
+
+      const platform = await zk.getDeviceOption('~Platform');
+      expect(platform).to.equal('ZEM760');
+      expect(executeStub.getCall(0).args[0]).to.equal(COMMANDS.CMD_OPTIONS_RRQ);
+      expect(executeStub.getCall(0).args[1].toString('ascii')).to.equal('~Platform\0');
+
+      await zk.setDeviceOption('GVS2', 0);
+      expect(executeStub.getCall(1).args[0]).to.equal(COMMANDS.CMD_OPTIONS_WRQ);
+      expect(executeStub.getCall(1).args[1].toString('ascii')).to.equal('GVS2=0\0');
+    });
+
     it('passes raw buffers through without verification', async () => {
       const zk = create();
       const executeStub = sinon.stub(zk, 'executeCmd').resolves(ackOkReply());

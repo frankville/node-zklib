@@ -315,6 +315,53 @@ describe('Timezone encoding helpers', () => {
     expect(buffer.readUInt8(7)).to.equal(0);
   });
 
+  it('encodes compact20 writes exactly as ZKAccess does on ZEM760 fw 6.60', () => {
+    // Pinned from a Wireshark capture of a real ZKAccess group sync:
+    // CMD_GRPTZ_WRQ = group 2, valid record, schedule (timezone) 2 in slot 1.
+    const buffer = encodeGroupTimezoneInfo({
+      group: 2,
+      timezones: [2, 0, 0],
+      format: 'compact20'
+    });
+
+    expect(buffer.length).to.equal(20);
+    expect(buffer.toString('hex')).to.equal('0200000001000000020000000000000000000000');
+
+    // valid:false zeroes the enable word, which deletes the record on-device.
+    const invalidated = encodeGroupTimezoneInfo({ group: 2, timezones: [2, 0, 0], valid: false, format: 'compact20' });
+    expect(invalidated.readUInt32LE(4)).to.equal(0);
+
+    // holiday must NOT touch the enable word (it is not the holiday flag).
+    const withHoliday = encodeGroupTimezoneInfo({ group: 2, timezones: [2, 0, 0], holiday: false, format: 'compact20' });
+    expect(withHoliday.readUInt32LE(4)).to.equal(1);
+  });
+
+  it('decodes compact20 replies as found flag plus u32 timezone slots', () => {
+    // Real readback of the record written by the captured ZKAccess sync.
+    const decoded = decodeGroupTimezoneInfo(Buffer.from('0100000002000000', 'hex'), {
+      format: 'compact20',
+      fallbackGroup: 2
+    });
+    expect(decoded.group).to.equal(2);
+    expect(decoded.found).to.equal(true);
+    expect(decoded.timezones).to.deep.equal([2, 0, 0]);
+    expect(decoded.plausible).to.equal(true);
+
+    const missing = decodeGroupTimezoneInfo(Buffer.from('00000000', 'hex'), {
+      format: 'compact20',
+      fallbackGroup: 3
+    });
+    expect(missing.found).to.equal(false);
+    expect(missing.timezones).to.deep.equal([0, 0, 0]);
+
+    const corrupt = decodeGroupTimezoneInfo(Buffer.from('0100000070876500', 'hex'), {
+      format: 'compact20',
+      fallbackGroup: 1
+    });
+    expect(corrupt.found).to.equal(true);
+    expect(corrupt.plausible).to.equal(false);
+  });
+
   it('rejects unknown group timezone formats', () => {
     expect(() => encodeGroupTimezoneInfo({ group: 1, format: 'bogus' })).to.throw(/unknown group timezone packet format/);
   });

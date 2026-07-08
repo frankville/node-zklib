@@ -631,7 +631,12 @@ module.exports.decodeUserTimezoneInfo = (data) => {
 //                                                replies carry found(u32) instead of the group, then the same 4 record bytes,
 //                                                and shrink to 4 zero bytes when the group has no record
 // - 'compact32' (32-bit firmware variant):       group(u32) tz1(u32) tz2(u32) tz3(u32) = 16 bytes, no verify byte
-const GROUP_TZ_FORMATS = ['legacy8', 'uint16', 'compact8', 'compact32'];
+// - 'compact20' (ZEM760 fw 6.60, captured from a real ZKAccess sync):
+//                write group(u32) holiday(u32) tz1(u32) tz2(u32) tz3(u32) = 20 bytes;
+//                replies carry found(u32) + tz slots (u32 each, zero-truncated), the
+//                group/holiday words are not echoed; verify style lives in the
+//                GVS<group> device option, not in this record
+const GROUP_TZ_FORMATS = ['legacy8', 'uint16', 'compact8', 'compact32', 'compact20'];
 
 const normalizeGroupTimezoneFormat = (format) => {
     if (format === undefined || format === null || format === '' || format === 'auto') {
@@ -642,6 +647,7 @@ const normalizeGroupTimezoneFormat = (format) => {
     if (value === 'uint16' || value === 'u16') return 'uint16';
     if (value === 'compact8' || value === 'u8') return 'compact8';
     if (value === 'compact32' || value === 'compact' || value === 'u32') return 'compact32';
+    if (value === 'compact20' || value === 'zem760') return 'compact20';
     throw new Error(`unknown group timezone packet format "${format}" (expected one of: ${GROUP_TZ_FORMATS.join(', ')})`);
 };
 
@@ -683,6 +689,19 @@ module.exports.encodeGroupTimezoneInfo = (options = {}) => {
         buffer.writeUInt32LE(slots[0], 4);
         buffer.writeUInt32LE(slots[1], 8);
         buffer.writeUInt32LE(slots[2], 12);
+        return buffer;
+    }
+
+    if (format === 'compact20') {
+        // Word 2 is a record valid/enable flag — writing 0 deletes the record
+        // (confirmed on ZEM760 fw 6.60). It is NOT the holiday flag; where the
+        // holiday bit lives on this firmware is still unknown.
+        const buffer = Buffer.alloc(20);
+        buffer.writeUInt32LE(toUInt32(options.group), 0);
+        buffer.writeUInt32LE(options.valid === false ? 0 : 1, 4);
+        buffer.writeUInt32LE(slots[0], 8);
+        buffer.writeUInt32LE(slots[1], 12);
+        buffer.writeUInt32LE(slots[2], 16);
         return buffer;
     }
 
@@ -750,6 +769,33 @@ module.exports.decodeGroupTimezoneInfo = (data, options = {}) => {
             raw,
             found: true,
             plausible: isPlausibleGroupTimezoneDecode(group, timezones)
+        };
+    }
+
+    if (format === 'compact20') {
+        // Replies do not echo the group or holiday words: first u32 is a
+        // found/valid flag, then the timezone slots as u32 words with trailing
+        // zero slots omitted. Groups without a record answer just 4 zero bytes.
+        const found = safeReadUInt32(data, 0) === 1;
+        const timezones = [];
+        if (found) {
+            for (let offset = 4; offset + 4 <= data.length && timezones.length < 3; offset += 4) {
+                timezones.push(safeReadUInt32(data, offset));
+            }
+        }
+        while (timezones.length < 3) {
+            timezones.push(0);
+        }
+        const normalized = timezones.map(normalizeTimezoneSlot);
+        return {
+            group: fallbackGroup,
+            timezones: normalized,
+            verifyStyle: 0,
+            holiday: false,
+            format,
+            raw,
+            found,
+            plausible: !found || normalized.every(tz => tz >= 0 && tz <= MAX_PLAUSIBLE_TIMEZONE_INDEX)
         };
     }
 

@@ -230,7 +230,8 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `setTimezone(info)` | `CMD_TZ_WRQ` | `encodeTimezoneInfo` packs 7×(start,end) day segments. |
 | `getUserTimezones(uid)` | `CMD_USERTZ_RRQ` | Returns `{ timezoneFlag, useUserTimezones, useGroupTimezones, timezones:[tz1,tz2,tz3] }`. |
 | `setUserTimezones(info)` | `CMD_USERTZ_WRQ` | 3 fixed slots; `flag=1` to use user TZ, `0` group TZ. |
-| `getGroupTimezones(group, options?)` | `CMD_GRPTZ_RRQ` | Returns `{ group, timezones, verifyStyle, holiday, format, raw, found, plausible }`. `options.format` selects the packet layout (`legacy8` \| `uint16` \| `compact8` \| `compact32`). |
+| `getGroupTimezones(group, options?)` | `CMD_GRPTZ_RRQ` | Returns `{ group, timezones, verifyStyle, holiday, format, raw, found, plausible }`. `options.format` selects the packet layout (`legacy8` \| `uint16` \| `compact8` \| `compact32` \| `compact20`; ZEM760 fw 6.60 uses `compact20`). |
+| `getDeviceOption(name)` / `setDeviceOption(name, value)` | `CMD_OPTIONS_RRQ` / `CMD_OPTIONS_WRQ` | ASCII device options (`~Platform`, `GVS<group>` verify style on compact panels, …). |
 | `setGroupTimezones(info, options?)` | `CMD_GRPTZ_WRQ` | 3 fixed slots; `verifyStyle` + holiday bit. Verified write by default: refreshes, reads back, and throws `ERR_GROUP_TZ_NOT_PERSISTED` if the device ACKed without persisting (some compact firmwares do). `options.verify=false` opts out; `options.format`/`options.formats` select or probe packet layouts; the persisting format is cached for the connection. Constructor option `groupTimezonePacketFormat` pins it up front. |
 | `getUserGroup(uid)` | `CMD_USERGRP_RRQ` | Reads the user’s group (1–100). |
 | `setUserGroup(info)` | `CMD_USERGRP_WRQ` | Writes user→group membership. |

@@ -9,10 +9,10 @@
 //   ZKLIB_E2E_GROUP_TZ_GROUP (5) — use a spare group with no members; the
 //     probe writes to it and restores it, but a firmware that half-persists a
 //     malformed layout can leave the group corrupted until rewritten.
-//   ZKLIB_E2E_GROUP_TZ_FORMATS (legacy8,compact32,compact8,uint16) — formats
-//     to probe, in order. Restrict this once the working format for a model is
-//     known. uint16 is probed last: it corrupted a record on at least one
-//     compact firmware.
+//   ZKLIB_E2E_GROUP_TZ_FORMATS (legacy8,compact20,compact32,compact8,uint16) —
+//     formats to probe, in order. Restrict this once the working format for a
+//     model is known (ZEM760 fw 6.60 → compact20). uint16 is probed last: it
+//     corrupted a record on at least one compact firmware.
 //   ZKLIB_E2E_GROUP_TZ_VALUES (0,1,2) — temporary timezones to write.
 //
 // The mutation test fails when the device ACKs the write but the readback
@@ -35,7 +35,7 @@ maybeDescribe('ZKLib group timezones (e2e)', function () {
   const inport = Number(process.env.ZKLIB_E2E_INPORT || 5500);
   const connectionType = process.env.ZKLIB_E2E_CONNECTION_TYPE || 'tcp';
   const testGroup = Number(process.env.ZKLIB_E2E_GROUP_TZ_GROUP || 5);
-  const probeFormats = (process.env.ZKLIB_E2E_GROUP_TZ_FORMATS || 'legacy8,compact32,compact8,uint16')
+  const probeFormats = (process.env.ZKLIB_E2E_GROUP_TZ_FORMATS || 'legacy8,compact20,compact32,compact8,uint16')
     .split(',').map(format => format.trim()).filter(Boolean);
   const tempTimezones = (process.env.ZKLIB_E2E_GROUP_TZ_VALUES || '0,1,2')
     .split(',').map(Number);
