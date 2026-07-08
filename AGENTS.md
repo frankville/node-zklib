@@ -165,7 +165,11 @@ PR Checklist
 
 Known Quirks
 - Group materialization: reads for groups without members often return zeros.
-- Compact TCP panels (observed on a 192.168.x panel, fw TBD): `CMD_GRPTZ_WRQ` replies `ACK_OK` without persisting when the payload layout is wrong — never trust the ACK alone (hence verified writes). `CMD_GRPTZ_RRQ` replies are 4 zero bytes for groups without a record, and 8 bytes (`found u32` + 4 record bytes) otherwise; the group number is not echoed. A malformed 8-byte write can corrupt the stored record (readback like `01 00 00 00 70 87 65 00`, `plausible=false`); rewrite the group with correct values to repair it.
+- Compact TCP panels (observed on a 192.168.x panel, fw TBD): `CMD_GRPTZ_WRQ` replies `ACK_OK` without persisting when the payload layout is wrong — never trust the ACK alone (hence verified writes). `CMD_GRPTZ_RRQ` replies are 4 zero bytes for groups without a record, and 8 bytes otherwise: `found(u16/u32)=1` + `tz1(u16) tz2(u16) tz3(u16)` (confirmed against ZKAccess: TZ2=1 → `[0,1,0]`); the group number is not echoed. Probing established on that panel:
+  - 8-byte `CMD_GRPTZ_WRQ` payloads are rejected (no ACK_OK) for groups with no record, and accepted (ACK_OK) for groups with one — but a wrong layout either persists nothing (`legacy8`) or corrupts the record (`uint16` produced readback `01 00 00 00 70 87 65 00`, `plausible=false`).
+  - 16-byte `compact32` payloads get ACK_OK for any group but never persisted, even with the device disabled during the write and `CMD_REFRESHDATA` after.
+  - The true write path for this firmware is still unconfirmed (candidates: ASCII payload as with unlock groups, bulk-data upload, or membership-driven materialization). Capture ZKAccess traffic to settle it.
+  - Reads can return a stale copy of the previous reply for a different group (a missing group echoed the prior group's record until a disable/enable + refresh cycle); re-read in a different order before trusting a surprising value.
 - Wrong password attempts: commonly produce EF_ALARM `misoperation` (if enabled) rather than EF_VERIFY.
 - UDP name/password truncation: 8/5 characters; TCP SSR allows longer fields.
 - Some models honor only the low byte of `uid` for group ops.

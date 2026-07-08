@@ -103,8 +103,10 @@ const setGroupTimezones = async (transport, info = {}, options = {}) => {
     }
 
     const ackSummary = attempts.every(attempt => attempt.ackOk)
-        ? 'the device acknowledged the write (ACK_OK)'
-        : 'the device did not acknowledge the write';
+        ? 'the device acknowledged every write (ACK_OK)'
+        : attempts.some(attempt => attempt.ackOk)
+            ? 'the device acknowledged some writes'
+            : 'the device rejected every write (no ACK_OK)';
     const error = new Error(
         `setGroupTimezones: group ${group} write not persisted — ${ackSummary} but readback does not match expected timezones [${expected.join(', ')}]. ` +
         `Attempts: ${JSON.stringify(attempts)}`

@@ -100,7 +100,8 @@ maybeDescribe('ZKLib group timezones (e2e)', function () {
         { formats: probeFormats }
       );
     } catch (err) {
-      writeError = err;
+      // The facade wraps failures in ZKError, which keeps the cause in .err.
+      writeError = err && err.err ? err.err : err;
     }
 
     if (writeError) {
