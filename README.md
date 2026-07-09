@@ -128,7 +128,7 @@ await zk.refreshData();
 await zk.disconnect();
 ```
 
-For door access, user CRUD is only one part of the configuration. A PIN/password user must also be allowed by the current access rules: assign the user to a group with `setUserGroup`, ensure that group has valid timezones with `setGroupTimezones`, and ensure the group is present in at least one unlock combination with `setUnlockGroups` or `setUnlockGroup`.
+For door access, user CRUD is only one part of the configuration. A PIN/password user must also be allowed by the current access rules: assign the user to a group with `setUserGroup`, ensure that group has valid timezones with `setGroupTimezones`, and ensure the group is present in at least one unlock combination with `setUnlockGroups` or `setUnlockGroup`. The last step is mandatory, not optional: on ZEM760 fw 6.60 a user whose group had a valid timezone record but was missing from every unlock combination was rejected at the panel with an "invalid group" error, and was accepted as soon as the group was added to a combination of its own (e.g. ASCII config `1:2::::::::`). Groups listed within the same combination form a multi-user (AND) opening rule; use separate combinations to authorize groups independently.
 
 Users can either inherit their schedule from the assigned group or use their own user-level schedule:
 
