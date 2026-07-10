@@ -23,14 +23,13 @@ const { createTCPHeader,
   toUInt32,
   encodeUserGroupInfo,
   decodeUserGroupInfo,
-  encodeUnlockGroupInfo,
   decodeUnlockGroupInfo,
-  encodeUnlockGroupsInfo,
   decodeUnlockGroupsInfo,
   makeCommKey } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
 const groupTimezonesHelper = require('./helpers/groupTimezones')
+const unlockGroupsHelper = require('./helpers/unlockGroups')
 
 const USER_PACKET_SIZE_28 = 28
 const USER_PACKET_SIZE_72 = 72
@@ -753,25 +752,8 @@ class ZKLibTCP {
 	    return decoded;
 	  }
 
-	  async setUnlockGroup(info = {}) {
-	    if (!Buffer.isBuffer(info) && this.unlockGroupsFormat === 'ascii') {
-	      const current = await this.getUnlockGroups();
-	      const combinations = current.combinations.map((combination) => ({
-	        combination: combination.combination,
-	        groups: combination.groups.filter(group => Number(group) > 0)
-	      }));
-	      const target = Number(info.combination ?? info.combinationNumber ?? info.combNo ?? info.index);
-	      if (!Number.isInteger(target) || target < 1 || target > 10) {
-	        throw new Error('setUnlockGroup: combination must be between 1 and 10');
-	      }
-	      combinations[target - 1] = {
-	        combination: target,
-	        groups: info.groups !== undefined ? info.groups : [info.group1, info.group2, info.group3, info.group4, info.group5]
-	      };
-	      return await this.setUnlockGroups({ combinations });
-	    }
-	    const payload = Buffer.isBuffer(info) ? info : encodeUnlockGroupInfo(info);
-	    return await this.executeCmd(COMMANDS.CMD_ULG_WRQ, payload);
+	  async setUnlockGroup(info = {}, options = {}) {
+	    return await unlockGroupsHelper.setUnlockGroup(this, info, options);
 	  }
 
 	  async getUnlockGroups() {
@@ -790,16 +772,9 @@ class ZKLibTCP {
 	    return { format: 'binary', combinations };
 	  }
 
-	  async setUnlockGroups(info = {}) {
-	    if (
-	      !Buffer.isBuffer(info) &&
-	      ['combination', 'combinationNumber', 'combNo', 'index'].some(key => Object.prototype.hasOwnProperty.call(info, key))
-	    ) {
-	      return await this.setUnlockGroup(info);
-	    }
-    const payload = Buffer.isBuffer(info) ? info : encodeUnlockGroupsInfo(info);
-    return await this.executeCmd(COMMANDS.CMD_ULG_WRQ, payload);
-  }
+	  async setUnlockGroups(info = {}, options = {}) {
+	    return await unlockGroupsHelper.setUnlockGroups(this, info, options);
+	  }
 
   async deleteUser(uid) {
     if (Buffer.isBuffer(uid)) {

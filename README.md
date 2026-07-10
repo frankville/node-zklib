@@ -236,9 +236,9 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `getUserGroup(uid)` | `CMD_USERGRP_RRQ` | Reads the user’s group (1–100). |
 | `setUserGroup(info)` | `CMD_USERGRP_WRQ` | Writes user→group membership. |
 | `getUnlockGroup(combination)` | `CMD_ULG_RRQ` | Reads one unlock combination, with up to 5 groups. |
-| `setUnlockGroup(info)` | `CMD_ULG_WRQ` | Writes one binary unlock combination. |
+| `setUnlockGroup(info, options?)` | `CMD_ULG_WRQ` | Writes one combination (binary, or full ASCII rewrite on compact firmware). Verified by default: refreshes, reads back, throws `ERR_UNLOCK_GROUPS_NOT_PERSISTED` on mismatch; `options.verify=false` opts out. |
 | `getUnlockGroups()` | `CMD_ULG_RRQ` | Reads all combinations; supports compact ASCII replies like `1:::::::::`. |
-| `setUnlockGroups(info)` | `CMD_ULG_WRQ` | Writes compact ASCII unlock-group config from `combinations`. |
+| `setUnlockGroups(info, options?)` | `CMD_ULG_WRQ` | Writes compact ASCII unlock-group config from `combinations`; verified by default (also confirms omitted combinations were cleared). Raw strings/Buffers skip verification. |
 | `getRealTimeLogs(cb)` | `CMD_REG_EVENT` | Emits realtime frames; see EF_* flags below. |
 
 Event flags used in realtime:

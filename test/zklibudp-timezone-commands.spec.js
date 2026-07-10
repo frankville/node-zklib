@@ -107,9 +107,12 @@ describe('ZKLibUDP timezone and access helpers', () => {
     reply.writeUInt8(1, 9);
     reply.writeUInt8(2, 10);
     reply.writeUInt16LE(2, 14);
+    const ackOk = Buffer.alloc(8);
+    ackOk.writeUInt16LE(COMMANDS.CMD_ACK_OK, 0);
     const executeStub = sinon.stub(zk, 'executeCmd');
-    executeStub.onFirstCall().resolves(reply);
-    executeStub.onSecondCall().resolves(Buffer.alloc(0));
+    executeStub.onCall(0).resolves(reply);
+    executeStub.onCall(1).resolves(ackOk); // CMD_ULG_WRQ
+    executeStub.onCall(2).resolves(ackOk); // CMD_REFRESHDATA
 
     const res = await zk.getUnlockGroup(7);
     expect(res.combination).to.equal(7);
@@ -117,10 +120,11 @@ describe('ZKLibUDP timezone and access helpers', () => {
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_ULG_RRQ);
     expect(executeStub.firstCall.args[1].readUInt8(0)).to.equal(7);
 
-    await zk.setUnlockGroup({ combination: 7, groups: [1, 2] });
+    await zk.setUnlockGroup({ combination: 7, groups: [1, 2] }, { verify: false });
     expect(executeStub.secondCall.args[0]).to.equal(COMMANDS.CMD_ULG_WRQ);
     expect(executeStub.secondCall.args[1].readUInt8(0)).to.equal(7);
     expect(executeStub.secondCall.args[1].readUInt16LE(6)).to.equal(2);
+    expect(executeStub.thirdCall.args[0]).to.equal(COMMANDS.CMD_REFRESHDATA);
   });
 
   it('reads compact ASCII unlock group configuration', async () => {
@@ -139,19 +143,30 @@ describe('ZKLibUDP timezone and access helpers', () => {
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_ULG_RRQ);
   });
 
-  it('writes compact ASCII unlock group configuration', async () => {
+  it('writes compact ASCII unlock group configuration with readback verification', async () => {
     const zk = new ZKLibUDP('127.0.0.1', 4370, 1000, 5500);
-    const executeStub = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+    const ackOk = Buffer.alloc(8);
+    ackOk.writeUInt16LE(COMMANDS.CMD_ACK_OK, 0);
+    const readback = Buffer.concat([
+      ackOk,
+      Buffer.from('1:::::::::\0', 'ascii')
+    ]);
+    const executeStub = sinon.stub(zk, 'executeCmd');
+    executeStub.onCall(0).resolves(ackOk); // CMD_ULG_WRQ
+    executeStub.onCall(1).resolves(ackOk); // CMD_REFRESHDATA
+    executeStub.onCall(2).resolves(readback); // CMD_ULG_RRQ readback
 
-    await zk.setUnlockGroups({
+    const result = await zk.setUnlockGroups({
       combinations: [
         { combination: 1, groups: [1] }
       ]
     });
 
-    expect(executeStub.calledOnce).to.equal(true);
+    expect(executeStub.callCount).to.equal(3);
     expect(executeStub.firstCall.args[0]).to.equal(COMMANDS.CMD_ULG_WRQ);
     expect(executeStub.firstCall.args[1].toString('ascii')).to.equal('1:::::::::\0');
+    expect(result.verified).to.equal(true);
+    expect(result.raw).to.equal('1:::::::::');
   });
 
   it('rejects empty unlock group collection writes', async () => {
@@ -170,19 +185,25 @@ describe('ZKLibUDP timezone and access helpers', () => {
 
   it('updates ASCII unlock group configuration after detecting compact format', async () => {
     const zk = new ZKLibUDP('127.0.0.1', 4370, 1000, 5500);
-    const readReply = Buffer.concat([
-      Buffer.alloc(8),
-      Buffer.from('1:::::::::\0', 'ascii')
-    ]);
+    const ackOk = Buffer.alloc(8);
+    ackOk.writeUInt16LE(COMMANDS.CMD_ACK_OK, 0);
+    const readReply = Buffer.concat([Buffer.alloc(8), Buffer.from('1:::::::::\0', 'ascii')]);
+    const readbackReply = Buffer.concat([ackOk, Buffer.from('1:1::::::::\0', 'ascii')]);
     const executeStub = sinon.stub(zk, 'executeCmd');
-    executeStub.onFirstCall().resolves(readReply);
-    executeStub.onSecondCall().resolves(readReply);
-    executeStub.onThirdCall().resolves(Buffer.alloc(0));
+    executeStub.onCall(0).resolves(readReply); // explicit getUnlockGroups
+    executeStub.onCall(1).resolves(readReply); // read inside the ascii rewrite
+    executeStub.onCall(2).resolves(ackOk); // CMD_ULG_WRQ
+    executeStub.onCall(3).resolves(ackOk); // CMD_REFRESHDATA
+    executeStub.onCall(4).resolves(readbackReply); // verification readback
 
     await zk.getUnlockGroups();
-    await zk.setUnlockGroup({ combination: 2, groups: [1] });
+    const result = await zk.setUnlockGroup({ combination: 2, groups: [1] });
 
-    expect(executeStub.thirdCall.args[0]).to.equal(COMMANDS.CMD_ULG_WRQ);
-    expect(executeStub.thirdCall.args[1].toString('ascii')).to.equal('1:1::::::::\0');
+    expect(executeStub.getCall(2).args[0]).to.equal(COMMANDS.CMD_ULG_WRQ);
+    expect(executeStub.getCall(2).args[1].toString('ascii')).to.equal('1:1::::::::\0');
+    expect(result.verified).to.equal(true);
+    expect(result.combination).to.equal(2);
+    expect(result.groups).to.deep.equal([1]);
+    expect(result.raw).to.equal('1:1::::::::');
   });
 });

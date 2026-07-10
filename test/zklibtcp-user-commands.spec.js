@@ -166,9 +166,12 @@ describe('ZKLibTCP user management helpers', () => {
     readReply.writeUInt8(3, 8);
     readReply.writeUInt8(1, 9);
     readReply.writeUInt16LE(1, 14);
+    const ackOk = Buffer.alloc(8);
+    ackOk.writeUInt16LE(COMMANDS.CMD_ACK_OK, 0);
     const executeStub = sinon.stub(zk, 'executeCmd');
     executeStub.onCall(0).resolves(readReply);
-    executeStub.onCall(1).resolves(Buffer.alloc(0));
+    executeStub.onCall(1).resolves(ackOk); // CMD_ULG_WRQ
+    executeStub.onCall(2).resolves(ackOk); // CMD_REFRESHDATA
 
     const res = await zk.getUnlockGroup(3);
     expect(res.combination).to.equal(3);
@@ -176,9 +179,10 @@ describe('ZKLibTCP user management helpers', () => {
     expect(executeStub.getCall(0).args[0]).to.equal(COMMANDS.CMD_ULG_RRQ);
     expect(executeStub.getCall(0).args[1].readUInt8(0)).to.equal(3);
 
-    await zk.setUnlockGroup({ combination: 3, groups: [1] });
+    await zk.setUnlockGroup({ combination: 3, groups: [1] }, { verify: false });
     expect(executeStub.getCall(1).args[0]).to.equal(COMMANDS.CMD_ULG_WRQ);
     expect(executeStub.getCall(1).args[1].readUInt8(0)).to.equal(3);
+    expect(executeStub.getCall(2).args[0]).to.equal(COMMANDS.CMD_REFRESHDATA);
   });
 
   it('routes explicit combination keys with falsy values through setUnlockGroup validation', async () => {

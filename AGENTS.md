@@ -88,8 +88,9 @@ Unlock Groups / Combinations
 - `encodeUnlockGroupInfo({ combination, groups, validGroups })` → 8 bytes: `combination(u8)`, 5 group slots (`u8`), `validGroups(u16)`.
 - `decodeUnlockGroupInfo(data, fallbackCombination)` handles the binary 8-byte form and compact ASCII forms.
 - `decodeUnlockGroupsInfo(data)` returns `{ format, combinations }`; compact devices may return ASCII like `1:::::::::` representing all 10 combinations in one string.
-- `setUnlockGroups({ combinations })` writes the compact ASCII form and rejects empty/malformed collection writes to avoid accidental wipe-all payloads; raw ASCII strings remain an explicit escape hatch.
-- `setUnlockGroup(info)` writes one binary combination unless a prior read detected compact ASCII unlock groups; in that case it updates the full ASCII configuration.
+- `setUnlockGroups({ combinations }, options?)` writes the compact ASCII form and rejects empty/malformed collection writes to avoid accidental wipe-all payloads; raw ASCII strings/Buffers remain an explicit unverified escape hatch.
+- `setUnlockGroup(info, options?)` writes one binary combination unless a prior read detected compact ASCII unlock groups; in that case it updates the full ASCII configuration.
+- Both unlock-group writes are **verified by default** (shared helper `helpers/unlockGroups.js`, same pattern as group timezones): write → `CMD_REFRESHDATA` → `getUnlockGroups()` readback → compare. On mismatch they throw `ERR_UNLOCK_GROUPS_NOT_PERSISTED` with `.mismatches` (`[{ combination, expected, actual }]`) and `.readback` attached; non-ACK writes throw `ERR_UNLOCK_GROUPS_WRITE_REJECTED`. `options.verify=false` / `options.refresh=false` opt out. `setUnlockGroups` verification also asserts that combinations omitted from the collection were cleared (the ASCII form always writes all ten slots). Verified end-to-end on the ZEM760.
 
 Realtime Events
 - UDP: `getRealTimeLogs(cb)` registers for realtime frames.

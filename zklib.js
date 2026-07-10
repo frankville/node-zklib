@@ -308,10 +308,10 @@ class ZKLib {
         )
     }
 
-    async setUnlockGroup(info){
+    async setUnlockGroup(info, options){
         return await this.functionWrapper(
-            ()=> this.zklibTcp.setUnlockGroup(info),
-            ()=> this.zklibUdp.setUnlockGroup(info)
+            ()=> this.zklibTcp.setUnlockGroup(info, options),
+            ()=> this.zklibUdp.setUnlockGroup(info, options)
         )
     }
 
@@ -322,10 +322,10 @@ class ZKLib {
         )
     }
 
-    async setUnlockGroups(info){
+    async setUnlockGroups(info, options){
         return await this.functionWrapper(
-            ()=> this.zklibTcp.setUnlockGroups(info),
-            ()=> this.zklibUdp.setUnlockGroups(info)
+            ()=> this.zklibTcp.setUnlockGroups(info, options),
+            ()=> this.zklibUdp.setUnlockGroups(info, options)
         )
     }
 
