@@ -92,6 +92,14 @@ Unlock Groups / Combinations
 - `setUnlockGroup(info, options?)` writes one binary combination unless a prior read detected compact ASCII unlock groups; in that case it updates the full ASCII configuration.
 - Both unlock-group writes are **verified by default** (shared helper `helpers/unlockGroups.js`, same pattern as group timezones): write → `CMD_REFRESHDATA` → `getUnlockGroups()` readback → compare. On mismatch they throw `ERR_UNLOCK_GROUPS_NOT_PERSISTED` with `.mismatches` (`[{ combination, expected, actual }]`) and `.readback` attached; non-ACK writes throw `ERR_UNLOCK_GROUPS_WRITE_REJECTED`. `options.verify=false` / `options.refresh=false` opt out. `setUnlockGroups` verification also asserts that combinations omitted from the collection were cleared (the ASCII form always writes all ten slots). Verified end-to-end on the ZEM760.
 
+Stored Attendance Logs
+- `getAttendances(cb)` (both transports) reads all stored attendance records via `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS`. The buffer starts with a 4-byte record-region size, then fixed-size records.
+- Record size is firmware-dependent and **auto-detected** by `decodeAttendanceData(body)` — it tries 40/16/8-byte framings, decodes each, and scores by plausible date (year 2000–2099) and uid, since several sizes can divide the buffer evenly. Returns `{ recordSize, records }`. Do not hardcode a size.
+  - 40B (SSR): `uid(u16)@0`, `userId(24 ascii)@2`, `status(u8)@26`, `time(u32)@27`, `punch(u8)@31`.
+  - 16B (compact, e.g. ZEM760 fw 6.60): `uid(u32)@0`, `time(u32)@4`, `status(u8)@8`, rest zero. No separate ASCII PIN — `deviceUserId` is the numeric uid as a string.
+  - 8B (legacy): `uid(u16)@0`, `status(u8)@2`, `time(u32)@3`, `punch(u8)@7`.
+- Normalized record shape: `{ userSn, deviceUserId, recordTime (Date), status, punch, ip }`. Verified on the ZEM760: 26 records, dates across Jul 8–10 2026, `status` observed as 0 or 7 (exact meaning — verify method vs in/out — still unconfirmed for this firmware). The old code hardcoded 40B for TCP and 16B/8B for UDP, so `getAttendances()` returned garbage (impossible dates, empty user IDs) on compact firmware.
+
 Realtime Events
 - UDP: `getRealTimeLogs(cb)` registers for realtime frames.
 - Event types: `EF_ATTLOG=1`, `EF_VERIFY=128`, `EF_ALARM=512` (see `constants.js`).

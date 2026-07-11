@@ -220,7 +220,7 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `getUsers()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_USERS` | Streams user records; decoder handles 28B (UDP) or 72B (TCP). |
 | `setUser(info)` | `CMD_USER_WRQ` | Uses `encodeUserInfo28` (UDP) or `encodeUserInfo72` (SSR/TCP) based on payload. |
 | `deleteUser(uid)` | `CMD_DELETE_USER` | 16‑bit uid. |
-| `getAttendances()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS` | Streams attendance logs (16B/40B variants). |
+| `getAttendances()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS` | Streams stored attendance logs. Auto-detects the record size (40B SSR / 16B compact / 8B legacy) and returns normalized `{ userSn, deviceUserId, recordTime, status, punch, ip }`. |
 | `clearAttendanceLog()` | `CMD_CLEAR_ATTLOG` | Clears stored logs. |
 | `openDoor()` | `CMD_UNLOCK` | Uses device door‑open delay. |
 | `enableDevice()` | `CMD_ENABLEDEVICE` |  |

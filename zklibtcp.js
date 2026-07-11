@@ -6,7 +6,7 @@ const { createTCPHeader,
   removeTcpHeader,
   decodeUserData28,
   decodeUserData72,
-  decodeRecordData40,
+  decodeAttendanceData,
   checkNotEventTCP,
   classifyTCPRealTimeEvent,
   decodeTCPRealTimeEvent,
@@ -594,17 +594,11 @@ class ZKLibTCP {
     }
 
 
-    const RECORD_PACKET_SIZE = 40
-
-    let recordData = data.data.subarray(4)
-    let records = []
-    while (recordData.length >= RECORD_PACKET_SIZE) {
-      const record = decodeRecordData40(recordData.subarray(0, RECORD_PACKET_SIZE))
-      records.push({ ...record, ip: this.ip })
-      recordData = recordData.subarray(RECORD_PACKET_SIZE)
-    }
-
-    return { data: records, err: data.err }
+    // The leading 4 bytes are the record-region size; records follow. The
+    // record size varies by firmware (40 SSR, 16 compact, 8 legacy), so it is
+    // auto-detected instead of assumed.
+    const { records } = decodeAttendanceData(data.data.subarray(4))
+    return { data: records.map(record => ({ ...record, ip: this.ip })), err: data.err }
 
   }
 

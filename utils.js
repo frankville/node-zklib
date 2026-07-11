@@ -1122,6 +1122,81 @@ module.exports.decodeRecordData16 = (recordData)=>{
     return record
 }
 
+// Stored attendance records come in three firmware-dependent sizes. All decode
+// to a normalized shape: { userSn, deviceUserId, recordTime, status, punch }.
+// - 40 bytes (SSR): uid(u16)@0, userId(24 ascii)@2, status(u8)@26, time(u32)@27, punch(u8)@31
+// - 16 bytes (compact, e.g. ZEM760 fw 6.60): uid(u32)@0, time(u32)@4, status(u8)@8, punch(u8)@9
+// - 8 bytes (legacy): uid(u16)@0, status(u8)@2, time(u32)@3, punch(u8)@7
+const ATTENDANCE_RECORD_SIZES = [40, 16, 8];
+
+const decodeAttendanceRecord = (rec, size) => {
+    if (size === 40) {
+        const userSn = rec.readUInt16LE(0);
+        const deviceUserId = rec.subarray(2, 26).toString('ascii').split('\0').shift();
+        return {
+            userSn,
+            deviceUserId: deviceUserId || String(userSn),
+            recordTime: parseTimeToDate(rec.readUInt32LE(27)),
+            status: rec.readUInt8(26),
+            punch: rec.readUInt8(31)
+        };
+    }
+    if (size === 8) {
+        const userSn = rec.readUInt16LE(0);
+        return {
+            userSn,
+            deviceUserId: String(userSn),
+            recordTime: parseTimeToDate(rec.readUInt32LE(3)),
+            status: rec.readUInt8(2),
+            punch: rec.readUInt8(7)
+        };
+    }
+    // 16-byte compact
+    const userSn = rec.readUInt32LE(0);
+    return {
+        userSn,
+        deviceUserId: String(userSn),
+        recordTime: parseTimeToDate(rec.readUInt32LE(4)),
+        status: rec.readUInt8(8),
+        punch: rec.readUInt8(9)
+    };
+};
+
+const scoreAttendanceRecord = (record) => {
+    let score = 0;
+    const year = record.recordTime instanceof Date ? record.recordTime.getFullYear() : NaN;
+    if (year >= 2000 && year <= 2099) score += 2;
+    if (Number.isInteger(record.userSn) && record.userSn > 0 && record.userSn <= 0xFFFFFF) score += 1;
+    return score;
+};
+
+// Auto-detects the record size (multiple sizes can divide the buffer evenly, so
+// candidates are scored by how many records decode to a plausible date/uid) and
+// returns { recordSize, records }.
+module.exports.decodeAttendanceData = (body) => {
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+        return { recordSize: 0, records: [] };
+    }
+
+    const candidates = ATTENDANCE_RECORD_SIZES
+        .filter(size => body.length >= size && body.length % size === 0)
+        .map(size => {
+            const records = [];
+            for (let offset = 0; offset + size <= body.length; offset += size) {
+                records.push(decodeAttendanceRecord(body.subarray(offset, offset + size), size));
+            }
+            const total = records.reduce((sum, record) => sum + scoreAttendanceRecord(record), 0);
+            return { recordSize: size, records, score: records.length ? total / records.length : 0 };
+        });
+
+    if (!candidates.length) {
+        return { recordSize: 0, records: [] };
+    }
+
+    candidates.sort((left, right) => (right.score - left.score) || (right.recordSize - left.recordSize));
+    return { recordSize: candidates[0].recordSize, records: candidates[0].records };
+};
+
 module.exports.decodeRecordRealTimeLog18 = (recordData)=>{
     const userId = recordData.readUIntLE(8,1)
     const attTime = parseHexToTime(recordData.subarray(12,18))

@@ -3,7 +3,7 @@ const { createLogger } = require('./helpers/logger')
 const {
   createUDPHeader,
   decodeUserData28,
-  decodeRecordData16,
+  decodeAttendanceData,
   decodeRecordRealTimeLog18,
   decodeRealTimeEvent,
   decodeUDPHeader,
@@ -461,33 +461,10 @@ class ZKLibUDP {
       }
     }
 
-    if (data.mode) {
-      // Data too small to decode in a normal way  => we need a parameter to indicate this case 
-      const RECORD_PACKET_SIZE = 8
-      let recordData = data.data.subarray(4)
-
-      let records = []
-      while (recordData.length >= RECORD_PACKET_SIZE) {
-        const record = decodeRecordData16(recordData.subarray(0, RECORD_PACKET_SIZE))
-        records.push({ ...record, ip: this.ip })
-        recordData = recordData.subarray(RECORD_PACKET_SIZE)
-      }
-
-      return { data: records, err: data.err }
-
-    } else {
-      const RECORD_PACKET_SIZE = 16
-      let recordData = data.data.subarray(4)
-
-      let records = []
-      while (recordData.length >= RECORD_PACKET_SIZE) {
-        const record = decodeRecordData16(recordData.subarray(0, RECORD_PACKET_SIZE))
-        records.push({ ...record, ip: this.ip })
-        recordData = recordData.subarray(RECORD_PACKET_SIZE)
-      }
-
-      return { data: records, err: data.err }
-    }
+    // The record size varies by firmware (40 SSR, 16 compact, 8 legacy) and is
+    // auto-detected from the buffer rather than inferred from the transfer mode.
+    const { records } = decodeAttendanceData(data.data.subarray(4))
+    return { data: records.map(record => ({ ...record, ip: this.ip })), err: data.err }
 
   }
 
