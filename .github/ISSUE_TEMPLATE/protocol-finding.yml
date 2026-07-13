@@ -1,0 +1,69 @@
+name: Protocol / hardware finding
+description: A device-behavior or packet-format finding that needs (or came from) real hardware.
+title: "[protocol] "
+labels: ["protocol"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for anything about how a device actually behaves on the wire:
+        packet layouts, firmware quirks, verify/persist behavior, realtime frames.
+        See `AGENTS.md` for the conventions and everything confirmed so far.
+  - type: input
+    id: device
+    attributes:
+      label: Device model
+      placeholder: "e.g. ZEM760"
+    validations:
+      required: false
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      placeholder: "e.g. Ver 6.60 Oct 16 2019"
+    validations:
+      required: false
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - TCP
+        - UDP
+        - Both
+        - Unknown
+    validations:
+      required: false
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior / raw bytes
+      description: What the device did. Paste raw hex (request + reply) when you have it.
+      placeholder: |
+        request payload: ...
+        reply data:      ...
+        decoded as:      ...
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / hypothesis
+      description: What you expected, or your current theory for what the bytes mean.
+    validations:
+      required: false
+  - type: checkboxes
+    id: hardware
+    attributes:
+      label: Verification
+      options:
+        - label: This needs a real device to confirm (add the `needs-hardware` label)
+        - label: I have already confirmed this on hardware
+  - type: input
+    id: refs
+    attributes:
+      label: Related AGENTS.md section / commit / issue
+      placeholder: "e.g. AGENTS.md 'Known Quirks', #12"
+    validations:
+      required: false

@@ -1,0 +1,40 @@
+name: Bug report
+description: Something in the library is wrong or broken.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+      description: A clear description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal code or steps. Include the ZKLib constructor options if relevant.
+      render: javascript
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: "e.g. 22.11.0"
+    validations:
+      required: false
+  - type: input
+    id: device
+    attributes:
+      label: Device model / firmware (if hardware-related)
+      placeholder: "e.g. ZEM760, fw Ver 6.60"
+    validations:
+      required: false

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Protocol reference & conventions
+    url: https://github.com/frankville/node-zklib/blob/master/AGENTS.md
+    about: Packet formats, firmware quirks, and contribution conventions confirmed so far.
+  - name: ZKTeco protocol docs
+    url: https://github.com/adrobinoga/zk-protocol/blob/master/protocol.md
+    about: Upstream reference for the ZKTeco command protocol.
