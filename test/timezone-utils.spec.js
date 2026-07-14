@@ -430,6 +430,7 @@ describe('Timezone encoding helpers', () => {
     expect(decoded).to.deep.equal({
       combination: 7,
       groups: [1, 2, 0, 0, 0],
+      groupCounts: { 1: 1, 2: 1 },
       validGroups: 2,
       format: 'binary'
     });
@@ -493,6 +494,25 @@ describe('Timezone encoding helpers', () => {
       ]
     });
     expect(reencoded.toString('ascii')).to.equal('1:23::::::::\0');
+  });
+
+  it('decodes per-group user counts as repeated group digits (captured)', () => {
+    // Real CMD_ULG_WRQ from a ZKAccess multi-user sync (ZEM760 fw 6.60):
+    // combination 2 = 1 user from group 2 AND 2 users from group 3 => "233".
+    const decoded = decodeUnlockGroupsInfo(Buffer.from('1:233::::::::\0', 'ascii'));
+    const comb2 = decoded.combinations[1];
+    expect(comb2.groups.filter(g => g > 0)).to.deep.equal([2, 3, 3]);
+    expect(comb2.groupCounts).to.deep.equal({ 2: 1, 3: 2 });
+    expect(comb2.validGroups).to.equal(3);
+
+    // Repeat a group in the input to require multiple users from it.
+    const reencoded = encodeUnlockGroupsInfo({
+      combinations: [
+        { combination: 1, groups: [1] },
+        { combination: 2, groups: [2, 3, 3] }
+      ]
+    });
+    expect(reencoded.toString('ascii')).to.equal('1:233::::::::\0');
   });
 
   it('tolerates legacy comma-separated multi-group tokens on decode', () => {

@@ -924,9 +924,17 @@ const unlockGroupFromValues = (combination, groups, validGroups, format = 'binar
     const resolvedValidGroups = validGroups === undefined || validGroups === null
         ? activeGroups.length
         : toUInt16(validGroups);
+    // Multi-user (AND) combinations repeat a group once per required user, so a
+    // duplicated group number means "N users from that group". groupCounts makes
+    // that legible: { "2": 1, "3": 2 } = 1 user from group 2, 2 from group 3.
+    const groupCounts = {};
+    for (const group of activeGroups) {
+        groupCounts[group] = (groupCounts[group] || 0) + 1;
+    }
     const result = {
         combination: toUInt16(combination) & 0xFF,
         groups: fixedGroups,
+        groupCounts,
         validGroups: resolvedValidGroups,
         format
     };
