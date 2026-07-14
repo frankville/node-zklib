@@ -220,7 +220,7 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `getUsers()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_USERS` | Streams user records; decoder handles 28B (UDP) or 72B (TCP). |
 | `setUser(info)` | `CMD_USER_WRQ` | Uses `encodeUserInfo28` (UDP) or `encodeUserInfo72` (SSR/TCP) based on payload. |
 | `deleteUser(uid)` | `CMD_DELETE_USER` | 16‑bit uid. |
-| `getAttendances()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS` | Streams stored attendance logs. Auto-detects the record size (40B SSR / 16B compact / 8B legacy) and returns normalized `{ userSn, deviceUserId, recordTime, status, punch, ip }`. |
+| `getAttendances()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS` | Streams stored attendance logs. Auto-detects the record size (40B SSR / 16B compact / 8B legacy) and returns normalized `{ userSn, deviceUserId, recordTime, status, punch, denied, ip }`. On compact firmware `status` is an access-result code (0=granted, 7=denied) and `denied` is derived from it. |
 | `clearAttendanceLog()` | `CMD_CLEAR_ATTLOG` | Clears stored logs. |
 | `openDoor()` | `CMD_UNLOCK` | Uses device door‑open delay. |
 | `enableDevice()` | `CMD_ENABLEDEVICE` |  |
@@ -242,7 +242,7 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `getRealTimeLogs(cb)` | `CMD_REG_EVENT` | Emits realtime frames; see EF_* flags below. |
 
 Event flags used in realtime:
-- `EF_ATTLOG` (1): attendance/log event.
+- `EF_ATTLOG` (1): attendance/log event. Decoded attendance events include a `denied` boolean and the raw `verif_state` (`0` = access granted, `0x87`/`135` = denied on ZEM760 fw 6.60). A denied punch is still an `EF_ATTLOG` event, so check `denied` rather than assuming `event_type=1` means access was granted.
 - `EF_VERIFY` (128): verify events (biometric/card; failures often appear here).
 - `EF_ALARM` (512): alarms (e.g., misoperation/illegal verify if enabled in device settings).
 

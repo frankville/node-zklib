@@ -98,7 +98,8 @@ Stored Attendance Logs
   - 40B (SSR): `uid(u16)@0`, `userId(24 ascii)@2`, `status(u8)@26`, `time(u32)@27`, `punch(u8)@31`.
   - 16B (compact, e.g. ZEM760 fw 6.60): `uid(u32)@0`, `time(u32)@4`, `status(u8)@8`, rest zero. No separate ASCII PIN — `deviceUserId` is the numeric uid as a string.
   - 8B (legacy): `uid(u16)@0`, `status(u8)@2`, `time(u32)@3`, `punch(u8)@7`.
-- Normalized record shape: `{ userSn, deviceUserId, recordTime (Date), status, punch, ip }`. Verified on the ZEM760: 26 records, dates across Jul 8–10 2026, `status` observed as 0 or 7 (exact meaning — verify method vs in/out — still unconfirmed for this firmware). The old code hardcoded 40B for TCP and 16B/8B for UDP, so `getAttendances()` returned garbage (impossible dates, empty user IDs) on compact firmware.
+- Normalized record shape: `{ userSn, deviceUserId, recordTime (Date), status, punch, denied, ip }`. The old code hardcoded 40B for TCP and 16B/8B for UDP, so `getAttendances()` returned garbage (impossible dates, empty user IDs) on compact firmware.
+- On the **16B compact** format the `status` byte is an **access-result code**, not the SSR "verify method": `0` = access granted, `7` = access denied. Confirmed on ZEM760 fw 6.60 by an A/B capture of the same user (denied punch stored `status=7`, granted `status=0`, matching the realtime frames below). `denied` is derived (`status !== 0`) for compact records; for 40B SSR `status`/`punch` keep their standard verify-method / in-out meaning and `denied` is left `false` (not inferred).
 
 Realtime Events
 - UDP: `getRealTimeLogs(cb)` registers for realtime frames.
@@ -106,6 +107,7 @@ Realtime Events
 - Decoder: `decodeRealTimeEvent(buffer)`
   - Normalizes TCP/UDP framing, probes multiple offsets for event code, and returns a typed JSON.
   - Success attendance: `event_type=1` and `att_date` etc.
+  - Access denied vs granted (attendance events, `event_type=1`): the `verif_state` byte carries the result — `0x00` = granted, `0x87` = denied (bit `0x80` = denied flag, low 7 bits = reason; `7` observed for unauthorized-group / "invalid group"). Confirmed on ZEM760 fw 6.60 by capturing the same user (UID 1) denied then granted: the two frames were byte-identical except `verif_state` (`0x87` vs `0x00`) and the timestamp. The decoders expose a derived `denied` boolean (`(verif_state & 0x80) !== 0`). Denied punches ARE logged (both as a realtime `EF_ATTLOG` and in the stored log with `status=7`), so `event_type=1` alone does not mean access was granted — check `denied`.
   - Biometric/card verify failure: `event_type=128` often with an invalid user signature (0xFFFFFFFF). We return an empty payload to signal failure.
   - Wrong PIN/password: many devices don’t emit `EF_VERIFY` for wrong passwords; instead, if “Illegal Verify/Misoperation” is enabled, they emit `EF_ALARM` (512) with `alarm_type="misoperation"`. Otherwise no frame may be sent.
 

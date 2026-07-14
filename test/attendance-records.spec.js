@@ -1,7 +1,7 @@
 'use strict';
 
 const { expect } = require('chai');
-const { decodeAttendanceData } = require('../utils');
+const { decodeAttendanceData, decodeTCPRealTimeEvent } = require('../utils');
 
 // First 12 records of a real attendance body captured from the ZEM760 (fw 6.60)
 // test panel. Full body was 26 records x 16 bytes = 416 bytes.
@@ -83,5 +83,50 @@ describe('decodeAttendanceData', () => {
 
   it('returns an empty result for empty buffers', () => {
     expect(decodeAttendanceData(Buffer.alloc(0))).to.deep.equal({ recordSize: 0, records: [] });
+  });
+
+  it('flags access-denied compact records via the status byte', () => {
+    // Real captured punches: 2026-07-14 17:40:01 denied (status 7),
+    // 17:42:16 granted (status 0). Timestamp packed the ZK way (month 0-indexed).
+    const packTime = (y, mo, d, h, mi, s) =>
+      ((((((y - 2000) * 12 + mo) * 31 + (d - 1)) * 24 + h) * 60 + mi) * 60 + s);
+    const rec16 = (uid, packed, status) => {
+      const b = Buffer.alloc(16);
+      b.writeUInt32LE(uid, 0);
+      b.writeUInt32LE(packed, 4);
+      b.writeUInt8(status, 8);
+      return b;
+    };
+
+    const denied = decodeAttendanceData(rec16(1, packTime(2026, 6, 14, 17, 40, 1), 7));
+    const granted = decodeAttendanceData(rec16(1, packTime(2026, 6, 14, 17, 42, 16), 0));
+
+    expect(denied.recordSize).to.equal(16);
+    expect(denied.records[0].status).to.equal(7);
+    expect(denied.records[0].denied).to.equal(true);
+    expect(granted.records[0].status).to.equal(0);
+    expect(granted.records[0].denied).to.equal(false);
+  });
+});
+
+describe('realtime attendance events', () => {
+  // Real EF_ATTLOG frames captured from the ZEM760: same user (UID 1),
+  // access denied vs granted, differing only in the verif_state byte.
+  const DENIED_FRAME = '5050827d14000000f401b95d010000000100000000871a070e112801';
+  const GRANTED_FRAME = '5050827d14000000f401b7d5010000000100000000001a070e112a10';
+
+  it('marks a denied punch (verif_state 0x87) as denied', () => {
+    const ev = decodeTCPRealTimeEvent(Buffer.from(DENIED_FRAME, 'hex'));
+    expect(ev.event_type).to.equal(1);
+    expect(ev.user_sn).to.equal(1);
+    expect(ev.verif_state).to.equal(135);
+    expect(ev.denied).to.equal(true);
+  });
+
+  it('marks a granted punch (verif_state 0x00) as not denied', () => {
+    const ev = decodeTCPRealTimeEvent(Buffer.from(GRANTED_FRAME, 'hex'));
+    expect(ev.event_type).to.equal(1);
+    expect(ev.verif_state).to.equal(0);
+    expect(ev.denied).to.equal(false);
   });
 });

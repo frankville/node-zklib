@@ -1129,8 +1129,18 @@ module.exports.decodeRecordData16 = (recordData)=>{
 // - 8 bytes (legacy): uid(u16)@0, status(u8)@2, time(u32)@3, punch(u8)@7
 const ATTENDANCE_RECORD_SIZES = [40, 16, 8];
 
+// Access result encoded in attendance events (confirmed on ZEM760 fw 6.60 by
+// A/B capture of the same user granted vs denied):
+// - realtime frames: verif_state = 0x00 granted, 0x87 denied (bit 0x80 = denied,
+//   low 7 bits = reason; 7 observed for unauthorized-group / invalid-group).
+// - stored 16-byte records: status byte = 0 granted, 7 denied.
+const ATTENDANCE_DENIED_BIT = 0x80;
+const isRealtimeAttendanceDenied = (verifState) => (verifState & ATTENDANCE_DENIED_BIT) !== 0;
+
 const decodeAttendanceRecord = (rec, size) => {
     if (size === 40) {
+        // SSR: status is the verify method and punch the in/out state — NOT an
+        // access-result flag — so `denied` is not inferred here.
         const userSn = rec.readUInt16LE(0);
         const deviceUserId = rec.subarray(2, 26).toString('ascii').split('\0').shift();
         return {
@@ -1138,7 +1148,8 @@ const decodeAttendanceRecord = (rec, size) => {
             deviceUserId: deviceUserId || String(userSn),
             recordTime: parseTimeToDate(rec.readUInt32LE(27)),
             status: rec.readUInt8(26),
-            punch: rec.readUInt8(31)
+            punch: rec.readUInt8(31),
+            denied: false
         };
     }
     if (size === 8) {
@@ -1148,17 +1159,21 @@ const decodeAttendanceRecord = (rec, size) => {
             deviceUserId: String(userSn),
             recordTime: parseTimeToDate(rec.readUInt32LE(3)),
             status: rec.readUInt8(2),
-            punch: rec.readUInt8(7)
+            punch: rec.readUInt8(7),
+            denied: false
         };
     }
-    // 16-byte compact
+    // 16-byte compact: status byte 0 = access granted, non-zero (7 observed) =
+    // access denied. See ATTENDANCE_DENIED_BIT note above.
     const userSn = rec.readUInt32LE(0);
+    const status = rec.readUInt8(8);
     return {
         userSn,
         deviceUserId: String(userSn),
         recordTime: parseTimeToDate(rec.readUInt32LE(4)),
-        status: rec.readUInt8(8),
-        punch: rec.readUInt8(9)
+        status,
+        punch: rec.readUInt8(9),
+        denied: status !== 0
     };
 };
 
@@ -1267,6 +1282,7 @@ const processAttendanceLog = (buf) => {
   json.verif_type = buf.readUIntLE(10, 1);
 
   json.verif_state = buf.readUIntLE(11, 1);
+  json.denied = isRealtimeAttendanceDenied(json.verif_state);
 
   const att_year = buf.readUIntLE(12, 1);
   const att_month = buf.readUIntLE(13, 1);
@@ -1343,11 +1359,13 @@ module.exports.decodeCompactTCPRealTimeAttendance = (recordData) => {
   const attTime = parseHexToTime(recvData.subarray(6, 12))
   const userSn = recvData.readUInt32LE(0)
 
+  const verifState = recvData.readUInt8(5)
   const event = {
     user_sn: userSn,
     userId: String(userSn),
     verif_type: recvData.readUInt8(4),
-    verif_state: recvData.readUInt8(5),
+    verif_state: verifState,
+    denied: isRealtimeAttendanceDenied(verifState),
     attTime,
     att_date: attTime,
     event_type: COMMANDS.EF_ATTLOG
