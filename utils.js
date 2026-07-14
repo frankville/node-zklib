@@ -938,8 +938,16 @@ const unlockGroupFromValues = (combination, groups, validGroups, format = 'binar
 
 const parseUnlockAsciiToken = (token) => {
     if (!token) return [];
-    const matches = token.match(/\d+/g) || [];
-    return matches.map(value => toUInt16(value)).filter(value => value > 0).slice(0, 5);
+    // A combination with more than one group is stored as concatenated single
+    // digits ("23" = groups 2 and 3), confirmed on ZEM760 fw 6.60 against a
+    // ZKAccess multi-user-verification sync. Commas/spaces are tolerated for
+    // backward compatibility. Consequence: unlock-combination groups must be
+    // single-digit (1–9) on this ASCII form.
+    const groups = [];
+    for (const ch of token) {
+        if (ch >= '1' && ch <= '9') groups.push(Number(ch));
+    }
+    return groups.slice(0, 5);
 };
 
 const looksLikeUnlockAscii = (payload) => {
@@ -1026,7 +1034,14 @@ module.exports.encodeUnlockGroupsInfo = (options = {}) => {
             entry.group4,
             entry.group5
         ], 'encodeUnlockGroupsInfo');
-        slots[slotIndex] = activeUnlockGroups(groups).join(',');
+        // Concatenate single-digit group numbers to match the device format
+        // ("23" = groups 2 and 3). Groups must be 1–9 (see parseUnlockAsciiToken).
+        const active = activeUnlockGroups(groups);
+        const outOfRange = active.find(group => group > 9);
+        if (outOfRange !== undefined) {
+            throw new Error(`encodeUnlockGroupsInfo: unlock-combination groups must be 1-9 (got ${outOfRange})`);
+        }
+        slots[slotIndex] = active.join('');
     });
 
     return Buffer.from(`${slots.join(':')}\0`, 'ascii');

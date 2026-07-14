@@ -473,7 +473,36 @@ describe('Timezone encoding helpers', () => {
       ]
     });
 
-    expect(buffer.toString('ascii')).to.equal('1::2,4:::::::\0');
+    // Multiple groups in one combination are concatenated digits (device format).
+    expect(buffer.toString('ascii')).to.equal('1::24:::::::\0');
+  });
+
+  it('round-trips a multi-user (AND) combination captured from ZKAccess', () => {
+    // Real CMD_ULG_WRQ payload from a ZKAccess multi-user-verification sync on
+    // ZEM760 fw 6.60: combination 2 requires groups 2 and 3 together, stored as
+    // the concatenated token "23" (NOT "2,3").
+    const decoded = decodeUnlockGroupsInfo(Buffer.from('1:23::::::::\0', 'ascii'));
+    expect(decoded.combinations[0].groups.filter(g => g > 0)).to.deep.equal([1]);
+    expect(decoded.combinations[1].groups.filter(g => g > 0)).to.deep.equal([2, 3]);
+    expect(decoded.combinations[1].validGroups).to.equal(2);
+
+    const reencoded = encodeUnlockGroupsInfo({
+      combinations: [
+        { combination: 1, groups: [1] },
+        { combination: 2, groups: [2, 3] }
+      ]
+    });
+    expect(reencoded.toString('ascii')).to.equal('1:23::::::::\0');
+  });
+
+  it('tolerates legacy comma-separated multi-group tokens on decode', () => {
+    const decoded = decodeUnlockGroupsInfo(Buffer.from('1:2,3::::::::\0', 'ascii'));
+    expect(decoded.combinations[1].groups.filter(g => g > 0)).to.deep.equal([2, 3]);
+  });
+
+  it('rejects unlock-combination groups above 9 for the ASCII form', () => {
+    expect(() => encodeUnlockGroupsInfo({ combinations: [{ combination: 1, groups: [2, 10] }] }))
+      .to.throw(/must be 1-9/);
   });
 
   it('rejects empty or malformed unlock-group collection writes', () => {
