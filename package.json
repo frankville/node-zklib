@@ -1,6 +1,6 @@
 {
   "name": "node-zklib",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "description": "light weight module for connect to biometrix device",
   "main": "zklib.js",
   "scripts": {
