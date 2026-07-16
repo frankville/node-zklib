@@ -5,7 +5,8 @@ const { expect } = require('chai');
 const {
   encodeUserInfo72,
   decodeUserData72,
-  encodeUserInfo28
+  encodeUserInfo28,
+  decodeUserData28
 } = require('../utils');
 
 describe('encodeUserInfo72', () => {
@@ -42,8 +43,49 @@ describe('encodeUserInfo72', () => {
     expect(decoded.name).to.equal('Test User');
     expect(decoded.password).to.equal('1234');
     expect(decoded.cardno).to.equal(98765);
+    expect(decoded.cardNumber).to.equal(98765);
+    expect(decoded.groupNumber).to.equal(7);
+    expect(decoded.userTimezoneFlag).to.equal(9);
+    expect(decoded.useUserTimezones).to.equal(false);
+    expect(decoded.useGroupTimezones).to.equal(true);
+    expect(decoded.timezones).to.deep.equal([2, 4, 6]);
     expect(decoded.role).to.equal(0x07);
+    expect(decoded.permissionToken).to.equal(0x07);
+    expect(decoded.enabled).to.equal(false);
+    expect(decoded.roleValue).to.equal(3);
+    expect(decoded.roleName).to.equal('admin');
     expect(decoded.userId).to.equal('USR42');
+  });
+
+  it('round-trips decoded 72-byte users without changing credentials or access fields', () => {
+    const original = encodeUserInfo72({
+      uid: 42,
+      userId: 'USR42',
+      name: 'ExactlyTwentyFourChars!!',
+      password: '12345678',
+      role: 'admin',
+      enabled: false,
+      cardNumber: 98765,
+      groupNumber: 7,
+      timezones: [2, 4, 6],
+      useGroupTimezones: false
+    });
+
+    const decoded = decodeUserData72(original);
+    const updated = encodeUserInfo72({
+      ...decoded,
+      name: 'Renamed'
+    });
+
+    expect(decoded.name).to.equal('ExactlyTwentyFourChars!!');
+    expect(updated.readUInt8(2)).to.equal(original.readUInt8(2));
+    expect(updated.toString('ascii', 3, 11).replace(/\0+$/, '')).to.equal('12345678');
+    expect(updated.readUInt32LE(35)).to.equal(98765);
+    expect(updated.readUInt8(39)).to.equal(7);
+    expect(updated.readUInt16LE(40)).to.equal(1);
+    expect(updated.readUInt16LE(42)).to.equal(2);
+    expect(updated.readUInt16LE(44)).to.equal(4);
+    expect(updated.readUInt16LE(46)).to.equal(6);
   });
 
   it('sanitises strings, fills missing fields, and honours timezone flags', () => {
@@ -59,10 +101,31 @@ describe('encodeUserInfo72', () => {
     expect(payload.readUInt16LE(0)).to.equal(1);
     expect(payload.readUInt8(2)).to.equal(0x00);
     expect(payload.toString('ascii', 11, 20).replace(/\0+$/, '')).to.equal('ngela '); // non-ascii stripped
-    expect(payload.readUInt16LE(40)).to.equal(1); // timezones array provided
+    expect(payload.readUInt16LE(40)).to.equal(0); // explicit group mode wins
     expect(payload.readUInt16LE(42)).to.equal(5);
     expect(payload.readUInt16LE(44)).to.equal(0);
     expect(payload.readUInt16LE(46)).to.equal(0);
+  });
+
+  it('honours semantic permission changes on decoded 72-byte users', () => {
+    const original = encodeUserInfo72({
+      uid: 42,
+      userId: 'USR42',
+      role: 'admin',
+      enabled: true,
+      useUserTimezones: true,
+      timezones: [1, 0, 0]
+    });
+    const decoded = decodeUserData72(original);
+
+    const disabled = encodeUserInfo72({ ...decoded, enabled: false });
+    expect(disabled.readUInt8(2)).to.equal(0x07);
+
+    const demoted = encodeUserInfo72({ ...decoded, role: 'user' });
+    expect(demoted.readUInt8(2)).to.equal(0x00);
+
+    const groupMode = encodeUserInfo72({ ...decoded, useGroupTimezones: true });
+    expect(groupMode.readUInt16LE(40)).to.equal(0);
   });
 
   it('throws when uid is missing', () => {
@@ -88,6 +151,68 @@ describe('encodeUserInfo28', () => {
     expect(buffer.toString('ascii', 3, 8).replace(/\0+$/, '')).to.equal('4321');
     expect(buffer.toString('ascii', 8, 16).replace(/\0+$/, '')).to.equal('Tester');
     expect(buffer.readUInt32LE(24)).to.equal(25);
+
+    const decoded = decodeUserData28(buffer);
+    expect(decoded.uid).to.equal(25);
+    expect(decoded.password).to.equal('4321');
+    expect(decoded.name).to.equal('Tester');
+    expect(decoded.userId).to.equal(25);
+    expect(decoded.role).to.equal(0x06);
+    expect(decoded.permissionToken).to.equal(0x06);
+    expect(decoded.enabled).to.equal(true);
+    expect(decoded.roleValue).to.equal(3);
+    expect(decoded.roleName).to.equal('admin');
+    expect(decoded.compactData).to.be.instanceOf(Buffer);
+    expect(decoded.compactData.length).to.equal(8);
+  });
+
+  it('round-trips decoded 28-byte users without changing credentials or permissions', () => {
+    const original = encodeUserInfo28({
+      uid: 25,
+      userId: 25,
+      name: 'Tester',
+      password: '4321',
+      role: 'admin',
+      enabled: false
+    });
+
+    const decoded = decodeUserData28(original);
+    const updated = encodeUserInfo28({
+      ...decoded,
+      name: 'Updated'
+    });
+
+    expect(updated.readUInt8(2)).to.equal(original.readUInt8(2));
+    expect(updated.toString('ascii', 3, 8).replace(/\0+$/, '')).to.equal('4321');
+    expect(updated.readUInt32LE(24)).to.equal(25);
+  });
+
+  it('honours semantic permission changes on decoded 28-byte users', () => {
+    const original = encodeUserInfo28({
+      uid: 26,
+      userId: 26,
+      role: 'admin',
+      enabled: true
+    });
+    const decoded = decodeUserData28(original);
+
+    const disabled = encodeUserInfo28({ ...decoded, enabled: false });
+    expect(disabled.readUInt8(2)).to.equal(0x07);
+
+    const demoted = encodeUserInfo28({ ...decoded, role: 'user' });
+    expect(demoted.readUInt8(2)).to.equal(0x00);
+  });
+
+  it('preserves compact 28-byte access data during read-modify-write', () => {
+    const original = Buffer.alloc(28);
+    original.writeUInt16LE(30, 0);
+    original.writeUInt32LE(30, 24);
+    Buffer.from('0102030405060708', 'hex').copy(original, 16);
+
+    const decoded = decodeUserData28(original);
+    const updated = encodeUserInfo28({ ...decoded, name: 'Changed' });
+
+    expect(updated.subarray(16, 24).toString('hex')).to.equal('0102030405060708');
   });
 
   it('falls back to uid when userId is non-numeric', () => {

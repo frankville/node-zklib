@@ -22,7 +22,7 @@ const ZKLib = require('./zklib')
 const test = async () => {
 
 
-    let zkInstance = new ZKLib('10.20.0.7', 4370, 10000, 4000);
+    let zkInstance = new ZKLib('10.20.0.7', 4370, 10000, 'udp', 4000);
     try {
         // Create socket to machine 
         await zkInstance.createSocket()
@@ -96,6 +96,65 @@ test()
 
 ```
 
+## User Management
+
+Applications can create, edit, and delete device users directly through the public facade. `setUser(info)` is an upsert: passing an existing `uid` updates that user, and passing a new `uid` creates it. Call `refreshData()` after writes so the device persists and applies the change.
+
+```js
+const ZKLib = require('node-zklib');
+
+const zk = new ZKLib('192.168.1.75', 4370, 10000, 'udp', 5500);
+await zk.createSocket();
+
+await zk.setUser({
+  uid: 123,
+  userId: 123,
+  name: 'Alice',
+  password: '4321',
+  role: 'user',
+  enabled: true
+});
+await zk.refreshData();
+
+// Editing is the same command with the same uid. Fields returned by getUsers()
+// include permissionToken/password data so a read-modify-write does not reset them.
+const users = (await zk.getUsers()).data;
+const current = users.find(user => Number(user.uid) === 123);
+await zk.setUser({ ...current, name: 'Alice B' });
+await zk.refreshData();
+
+await zk.deleteUser(123);
+await zk.refreshData();
+await zk.disconnect();
+```
+
+For door access, user CRUD is only one part of the configuration. A PIN/password user must also be allowed by the current access rules: assign the user to a group with `setUserGroup`, ensure that group has valid timezones with `setGroupTimezones`, and ensure the group is present in at least one unlock combination with `setUnlockGroups` or `setUnlockGroup`. The last step is mandatory, not optional: on ZEM760 fw 6.60 a user whose group had a valid timezone record but was missing from every unlock combination was rejected at the panel with an "invalid group" error, and was accepted as soon as the group was added to a combination of its own (e.g. ASCII config `1:2::::::::`). Groups listed within the same combination form a multi-user (AND) opening rule; use separate combinations to authorize groups independently.
+
+Users can either inherit their schedule from the assigned group or use their own user-level schedule:
+
+```js
+await zk.setUserGroup({ uid: 123, group: 1 });
+await zk.setUserTimezones({ uid: 123, useGroupTimezones: true });
+
+const inherited = await zk.getUserTimezones(123);
+// => { useGroupTimezones: true, useUserTimezones: false, timezones: [...] }
+
+await zk.setUserTimezones({ uid: 123, useUserTimezones: true, timezones: [1, 0, 0] });
+
+const direct = await zk.getUserTimezones(123);
+// => { useGroupTimezones: false, useUserTimezones: true, timezones: [1, 0, 0] }
+```
+
+Compact access-control devices may read back user timezone mode as a 32-bit flag. `1` means user-level timezones, while values such as `0xfffffffe` mean group-inherited timezones. The decoder normalizes those variants and hides sentinel timezone slots like `0xffff`.
+
+TCP devices may use either 72-byte SSR user records or compact 28-byte records. `getUsers()` detects the record size and reuses it for later writes. If an application needs to create a user over TCP before listing users, pass `{ userPacketSize: 28 }` for compact devices:
+
+```js
+const zk = new ZKLib('192.168.1.75', 4370, 10000, 'tcp', undefined, 0, {
+  userPacketSize: 28
+});
+```
+
 ## Timezone Helpers
 
 This fork now exposes convenience methods to manage timezones and assignments:
@@ -115,9 +174,12 @@ await zkInstance.setGroupTimezones({ group: 2, timezones: [5, 0, 0], verifyStyle
 
 await zkInstance.setUserGroup({ uid: 123, group: 2 });
 const groupInfo = await zkInstance.getUserGroup(123);
+
+await zkInstance.setUnlockGroup({ combination: 1, groups: [2] });
+const unlockGroups = await zkInstance.getUnlockGroups();
 ```
 
-Each helper wraps the low-level commands (`CMD_TZ_WRQ`, `CMD_TZ_RRQ`, `CMD_USERTZ_WRQ`, `CMD_GRPTZ_WRQ`), handling byte encoding for you. Use `getUserTimezones` / `getGroupTimezones` to inspect current assignments.
+Each helper wraps the low-level commands (`CMD_TZ_WRQ`, `CMD_TZ_RRQ`, `CMD_USERTZ_WRQ`, `CMD_GRPTZ_WRQ`, `CMD_ULG_WRQ`, `CMD_ULG_RRQ`), handling byte encoding for you. Use `getUserTimezones` / `getGroupTimezones` / `getUnlockGroups` to inspect current assignments.
 
 ## Diagnostic Logging
 
@@ -158,7 +220,7 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `getUsers()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_USERS` | Streams user records; decoder handles 28B (UDP) or 72B (TCP). |
 | `setUser(info)` | `CMD_USER_WRQ` | Uses `encodeUserInfo28` (UDP) or `encodeUserInfo72` (SSR/TCP) based on payload. |
 | `deleteUser(uid)` | `CMD_DELETE_USER` | 16‑bit uid. |
-| `getAttendances()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS` | Streams attendance logs (16B/40B variants). |
+| `getAttendances()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS` | Streams stored attendance logs. Auto-detects the record size (40B SSR / 16B compact / 8B legacy) and returns normalized `{ userSn, deviceUserId, recordTime, status, punch, denied, ip }`. On compact firmware `status` is an access-result code (0=granted, 7=denied) and `denied` is derived from it. |
 | `clearAttendanceLog()` | `CMD_CLEAR_ATTLOG` | Clears stored logs. |
 | `openDoor()` | `CMD_UNLOCK` | Uses device door‑open delay. |
 | `enableDevice()` | `CMD_ENABLEDEVICE` |  |
@@ -166,16 +228,21 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `refreshData()` | `CMD_REFRESHDATA` | Recommended after writes. |
 | `getTimezone(index)` | `CMD_TZ_RRQ` | Decoder handles 2‑byte+footer and 4‑byte index formats. |
 | `setTimezone(info)` | `CMD_TZ_WRQ` | `encodeTimezoneInfo` packs 7×(start,end) day segments. |
-| `getUserTimezones(uid)` | `CMD_USERTZ_RRQ` | Returns `{ useGroupTimezones, timezones:[tz1,tz2,tz3] }`. |
+| `getUserTimezones(uid)` | `CMD_USERTZ_RRQ` | Returns `{ timezoneFlag, useUserTimezones, useGroupTimezones, timezones:[tz1,tz2,tz3] }`. |
 | `setUserTimezones(info)` | `CMD_USERTZ_WRQ` | 3 fixed slots; `flag=1` to use user TZ, `0` group TZ. |
-| `getGroupTimezones(group)` | `CMD_GRPTZ_RRQ` | Returns `{ group, timezones, verifyStyle, holiday }`. |
-| `setGroupTimezones(info)` | `CMD_GRPTZ_WRQ` | 3 fixed slots; `verifyStyle` + holiday bit. |
+| `getGroupTimezones(group, options?)` | `CMD_GRPTZ_RRQ` | Returns `{ group, timezones, verifyStyle, holiday, format, raw, found, plausible }`. `options.format` selects the packet layout (`legacy8` \| `uint16` \| `compact8` \| `compact32` \| `compact20`; ZEM760 fw 6.60 uses `compact20`). |
+| `getDeviceOption(name)` / `setDeviceOption(name, value)` | `CMD_OPTIONS_RRQ` / `CMD_OPTIONS_WRQ` | ASCII device options (`~Platform`, `GVS<group>` verify style on compact panels, …). |
+| `setGroupTimezones(info, options?)` | `CMD_GRPTZ_WRQ` | 3 fixed slots; `verifyStyle` + holiday bit. Verified write by default: refreshes, reads back, and throws `ERR_GROUP_TZ_NOT_PERSISTED` if the device ACKed without persisting (some compact firmwares do). `options.verify=false` opts out; `options.format`/`options.formats` select or probe packet layouts; the persisting format is cached for the connection. Constructor option `groupTimezonePacketFormat` pins it up front. |
 | `getUserGroup(uid)` | `CMD_USERGRP_RRQ` | Reads the user’s group (1–100). |
 | `setUserGroup(info)` | `CMD_USERGRP_WRQ` | Writes user→group membership. |
+| `getUnlockGroup(combination)` | `CMD_ULG_RRQ` | Reads one unlock combination, with up to 5 groups. |
+| `setUnlockGroup(info, options?)` | `CMD_ULG_WRQ` | Writes one combination (binary, or full ASCII rewrite on compact firmware). Verified by default: refreshes, reads back, throws `ERR_UNLOCK_GROUPS_NOT_PERSISTED` on mismatch; `options.verify=false` opts out. |
+| `getUnlockGroups()` | `CMD_ULG_RRQ` | Reads all combinations; supports compact ASCII replies like `1:::::::::`. |
+| `setUnlockGroups(info, options?)` | `CMD_ULG_WRQ` | Writes compact ASCII unlock-group config from `combinations`; verified by default (also confirms omitted combinations were cleared). Raw strings/Buffers skip verification. |
 | `getRealTimeLogs(cb)` | `CMD_REG_EVENT` | Emits realtime frames; see EF_* flags below. |
 
 Event flags used in realtime:
-- `EF_ATTLOG` (1): attendance/log event.
+- `EF_ATTLOG` (1): attendance/log event. Decoded attendance events include a `denied` boolean and the raw `verif_state` (`0` = access granted, `0x87`/`135` = denied on ZEM760 fw 6.60). A denied punch is still an `EF_ATTLOG` event, so check `denied` rather than assuming `event_type=1` means access was granted.
 - `EF_VERIFY` (128): verify events (biometric/card; failures often appear here).
 - `EF_ALARM` (512): alarms (e.g., misoperation/illegal verify if enabled in device settings).
 
@@ -183,11 +250,19 @@ Timezone notes:
 - Devices have fixed 3 timezone slots per user/group; unused slots must be zero. Some firmwares return values like `256` for tz `1` (endianness quirk) — callers may normalize.
 - Closed days may read back as 23→0 on some models; treat as “no access”.
 
+Unlock group notes:
+- A user can belong to one group, that group can have timezones, and unlock combinations decide which groups can actually release the door.
+- Binary unlock combinations have 5 group slots plus `validGroups`. Compact devices may return one ASCII string for all 10 combinations, such as `1:::::::::` for “combination 1 uses group 1”.
+- `setUnlockGroups({ combinations })` requires a non-empty `combinations` array. Empty or malformed objects are rejected so apps do not accidentally write `:::::::::` and clear all unlock combinations. To intentionally write raw compact ASCII, pass the string explicitly.
+
 ## Tests
 
 - Unit tests live under `test/*.spec.js` and exercise user CRUD plus the new timezone helper methods (`setTimezone`, `setUserTimezones`, `setGroupTimezones`).
-- There is an optional end-to-end spec (`test/e2e-user-lifecycle.spec.js`) that drives a create → update → delete cycle against a physical device.  
-  It is skipped automatically unless the required environment variables are provided.
+- There are optional end-to-end specs for physical devices:
+  - `test/e2e-user-lifecycle.spec.js` drives a create → update → delete user cycle.
+  - `test/e2e-user-access-groups.spec.js` creates a temporary user, assigns a group, toggles group/user timezone mode, and deletes the user.
+  - `test/e2e-unlock-groups.spec.js` writes one temporary unlock combination, verifies readback, and restores the original config.
+  They are skipped automatically unless the required environment variables are provided.
 
 ### Run unit tests
 
@@ -208,7 +283,15 @@ Additional environment variables:
 - `ZKLIB_E2E_INPORT` to change the UDP listening port (default 5500).
 - `ZKLIB_E2E_SOCKET_TIMEOUT` to tweak the connection timeout (default 10000 ms).
 - `ZKLIB_E2E_TIMEOUT` to override Mocha’s timeout for the e2e suite (default 45000 ms).
+- `ZKLIB_E2E_CONNECTION_TYPE` to use `udp` or `tcp` for e2e specs (default `udp`).
+- `ZKLIB_E2E_USER_PACKET_SIZE=28` to force compact user writes during the user lifecycle e2e, useful for compact TCP devices.
+- `ZKLIB_E2E_USER_ACCESS_GROUPS=1` to enable the user group/timezone mutation e2e.
+- `ZKLIB_E2E_ACCESS_UID`, `ZKLIB_E2E_ACCESS_GROUP`, and `ZKLIB_E2E_ACCESS_TIMEZONE` to choose the temporary user/group/timezone for that e2e (defaults: uid 242, group 1, timezone 1).
+- `ZKLIB_E2E_UNLOCK_GROUPS=1` to enable the unlock-groups mutation e2e.
+- `ZKLIB_E2E_UNLOCK_COMBINATION` and `ZKLIB_E2E_UNLOCK_GROUP` to choose the temporary unlock combination/group (defaults: combination 2, group 1).
 
 **Warning:** the end-to-end scenario mutates real users on the device. Use a dedicated UID or a lab unit.
 
-**User ID note:** legacy commands (notably `CMD_USERGRP_WRQ/RRQ`) only transmit the low byte of the UID. Keep test/account UIDs ≤ 255 whenever you intend to manage group membership programmatically.
+**Unlock group warning:** the unlock-groups e2e mutates door access rules briefly, then restores the original config in `finally`. Run it only on a lab device or a supervised test door.
+
+**User ID note:** `CMD_USERGRP_WRQ/RRQ` carry the full UID as a little-endian u32 (confirmed via ZKAccess capture and hardware verification on ZEM760 fw 6.60), so UIDs up to 65534 work for group membership. Use `getInfo()` to read the device's real capacities (users/fingerprints/records, plus used and available counts); groups are limited to 1–100 and timezones to 1–50 by the protocol.

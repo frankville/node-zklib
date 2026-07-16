@@ -166,4 +166,29 @@ describe('ZKLib logger integration', () => {
     assert.strictEqual(zk.zklibTcp.comm_code, 0);
     assert.strictEqual(calls.length, 1);
   });
+
+  it('defaults the facade to udp and supports the legacy inport position', () => {
+    const zk = new ZKLib('127.0.0.1', 4370, 1000, 5510);
+
+    assert.strictEqual(zk.connectionType, 'udp');
+    assert.strictEqual(zk.zklibUdp.inport, 5510);
+  });
+
+  it('normalizes connection type casing and rejects invalid values', () => {
+    const tcp = new ZKLib('127.0.0.1', 4370, 1000, 'TCP');
+    assert.strictEqual(tcp.connectionType, 'tcp');
+
+    assert.throws(
+      () => new ZKLib('127.0.0.1', 4370, 1000, 'tcpo'),
+      /connectionType must be either/
+    );
+  });
+
+  it('passes user packet size options to the tcp transport', () => {
+    const zk = new ZKLib('127.0.0.1', 4370, 1000, 'tcp', undefined, 0, {
+      userPacketSize: 28,
+    });
+
+    assert.strictEqual(zk.zklibTcp.userPacketSize, 28);
+  });
 });

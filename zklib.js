@@ -6,12 +6,23 @@ const { createLogger } = require('./helpers/logger')
 
 class ZKLib {
     constructor(ip, port, timeout, connType, inport, comm_code = 0, options = {}){
+        if (typeof connType === 'number' && inport === undefined) {
+            inport = connType
+            connType = 'udp'
+        }
+
         if (comm_code && typeof comm_code === 'object' && !Buffer.isBuffer(comm_code)) {
             options = comm_code
             comm_code = 0
         }
 
-        this.connectionType = connType;
+        const normalizedConnectionType = connType === undefined || connType === null
+            ? 'udp'
+            : connType.toString().toLowerCase();
+        if (normalizedConnectionType !== 'tcp' && normalizedConnectionType !== 'udp') {
+            throw new Error('connectionType must be either "udp" or "tcp"');
+        }
+        this.connectionType = normalizedConnectionType;
         this.logger = createLogger({
             level: options.logLevel,
             logger: options.logger,
@@ -21,9 +32,11 @@ class ZKLib {
         })
 
         this.zklibTcp = new ZKLibTCP(ip, port, timeout, comm_code, {
+            ...options,
             logger: this.logger.child('tcp', { port, transport: 'tcp' })
         })
         this.zklibUdp = new ZKLibUDP(ip,port,timeout , inport, {
+            ...options,
             logger: this.logger.child('udp', { port, inport, transport: 'udp' })
         })
         this.interval = null 
@@ -246,17 +259,31 @@ class ZKLib {
         )
     }
 
-    async getGroupTimezones(group){
+    async getGroupTimezones(group, options){
         return await this.functionWrapper(
-            ()=> this.zklibTcp.getGroupTimezones(group),
-            ()=> this.zklibUdp.getGroupTimezones(group)
+            ()=> this.zklibTcp.getGroupTimezones(group, options),
+            ()=> this.zklibUdp.getGroupTimezones(group, options)
         )
     }
 
-    async setGroupTimezones(info){
+    async setGroupTimezones(info, options){
         return await this.functionWrapper(
-            ()=> this.zklibTcp.setGroupTimezones(info),
-            ()=> this.zklibUdp.setGroupTimezones(info)
+            ()=> this.zklibTcp.setGroupTimezones(info, options),
+            ()=> this.zklibUdp.setGroupTimezones(info, options)
+        )
+    }
+
+    async getDeviceOption(name){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getDeviceOption(name),
+            ()=> this.zklibUdp.getDeviceOption(name)
+        )
+    }
+
+    async setDeviceOption(name, value){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setDeviceOption(name, value),
+            ()=> this.zklibUdp.setDeviceOption(name, value)
         )
     }
 
@@ -271,6 +298,34 @@ class ZKLib {
         return await this.functionWrapper(
             ()=> this.zklibTcp.setUserGroup(info),
             ()=> this.zklibUdp.setUserGroup(info)
+        )
+    }
+
+    async getUnlockGroup(combination){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getUnlockGroup(combination),
+            ()=> this.zklibUdp.getUnlockGroup(combination)
+        )
+    }
+
+    async setUnlockGroup(info, options){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setUnlockGroup(info, options),
+            ()=> this.zklibUdp.setUnlockGroup(info, options)
+        )
+    }
+
+    async getUnlockGroups(){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getUnlockGroups(),
+            ()=> this.zklibUdp.getUnlockGroups()
+        )
+    }
+
+    async setUnlockGroups(info, options){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setUnlockGroups(info, options),
+            ()=> this.zklibUdp.setUnlockGroups(info, options)
         )
     }
 
