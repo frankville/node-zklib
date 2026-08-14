@@ -44,6 +44,14 @@ User Encoding
   - `groupNumber` (1–100), `cardNumber` (u32), `enabled` and `role` encoded into a `permissionToken`.
   - Timezone flags for SSR (72B): `userTimezoneFlag`, `useGroupTimezones`, and per-user `timezones` (3 slots).
 - Decoders: `decodeUserData28`, `decodeUserData72`.
+- **Per-user validity/expiry dates are NOT synced to the standalone device** (ZEM760 fw Ver 6.60, captured from a real ZKAccess sync). ZKAccess exposes them under *Personal → Usuarios → Editar → Niveles de acceso* as "Establecer validez" + "Fecha inicial"/"Fecha final", but checking it and setting 13/08/2026 → 16/08/2026 produced **no date bytes on the wire**. Verified three ways:
+  - All 85 PC→device commands in the session were decoded and searched for both dates in 12 encodings — the packed u32 of `parseTimeToDate`, the 6-byte y/m/d/h/m/s of `parseHexToTime`, Unix LE/BE, days-since-2000 (u32/u16), `YYYYMMDD` as int, `y-2000`/m/d bytes, and three ASCII forms. Zero hits.
+  - The user write (`CMD_PREPARE_DATA` + `CMD_DATA`, 41 bytes) is fully accounted for: `02` (group), `01`, ASCII `"1234"`/`"German"`, `1d` (=29, record length), trailing `512`/`1`. No room for a date in any encoding.
+  - ZKAccess's own post-sync read-back (`CMD_DATA_WRRQ` → 4×28B records) differs from the pre-sync read by exactly 5 bytes on the edited user: password `"1"`→`"1234"` (bytes 4–6), a stray `1d` in the name tail (byte 15), and group `01`→`02` (byte 21, `compactData[5]`). Other users byte-identical.
+  - What *did* sync from that same dialog: the access level ("general" / 24-Hour-Accessible) as `CMD_USERTZ_WRQ` `uid=1, flag=1, tz1=1`, and the multi-user group inside the user record.
+  - So validity is a ZKAccess server-side concept, like the holiday flag (see `compact20` below). **Applications must enforce expiry themselves** — track the window and push `setUser({ ...current, enabled: false })` or `deleteUser(uid)` + `refreshData()` at the boundary. Do not add validity fields to the user encoders without a capture showing them on the wire.
+  - Caveat: single-state capture (validity checked); no "unchecked" baseline was taken. The byte-level accounting above is what carries the conclusion.
+- Incidental hardware confirmations from that same capture: `CMD_GET_PINWIDTH` replies `09`, i.e. the device itself reports the 9-character `userId` width; and a live record carries `uid 2` with `userId 300000`, confirming that large ids are fine in `userId` but not in `uid`.
 
 Timezone Encoding
 - `encodeTimezoneInfo({ index, days|schedule, default })` → 32 bytes
