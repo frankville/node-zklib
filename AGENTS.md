@@ -39,8 +39,8 @@ User Encoding
 - Encoders: `encodeUserInfo28` and `encodeUserInfo72`.
   - `name`: ASCII only, padded with `\0`; UDP 8 chars; TCP 24 chars.
   - `password`: ASCII; UDP 5 chars; TCP 8 chars.
-  - `userId` (device user-id): UDP path is 32-bit numeric (falls back to `uid`), TCP is 9-byte ASCII.
-  - `uid`: 16-bit LE (1–65534 usable). Group ops (`CMD_USERGRP_RRQ/WRQ`) carry the **full uid as u32** — a ZKAccess capture on ZEM760 fw 6.60 shows `d2040000 02` for uid 1234 → group 2, and full-uid reads were verified on hardware. (An earlier encoder bug truncated the uid to one byte here; the old "keep uid ≤ 255 for group ops" advice stemmed from that bug, not from the protocol.)
+  - `userId` (device user-id): UDP path is 32-bit numeric (falls back to `uid` when non-numeric — this is the SSR→compact round-trip path and is intentional), TCP is 9-byte ASCII. Both encoders now reject values that would be silently mangled: over 9 chars or non-ASCII on TCP, non-integer/negative/over `0xFFFFFFFF` on UDP. Use ≤ 9 numeric digits for a scheme that is valid on both transports.
+  - `uid`: 16-bit LE (1–65534 usable) — the user-table slot index, **not** a business identifier. Both encoders reject anything outside that range (`encodeUserInfo72: uid must be an integer between 1 and 65534`) rather than clamping; identifiers larger than 65534 belong in `userId`. Group ops (`CMD_USERGRP_RRQ/WRQ`) carry the **full uid as u32** — a ZKAccess capture on ZEM760 fw 6.60 shows `d2040000 02` for uid 1234 → group 2, and full-uid reads were verified on hardware. (An earlier encoder bug truncated the uid to one byte here; the old "keep uid ≤ 255 for group ops" advice stemmed from that bug, not from the protocol.)
   - `groupNumber` (1–100), `cardNumber` (u32), `enabled` and `role` encoded into a `permissionToken`.
   - Timezone flags for SSR (72B): `userTimezoneFlag`, `useGroupTimezones`, and per-user `timezones` (3 slots).
 - Decoders: `decodeUserData28`, `decodeUserData72`.
