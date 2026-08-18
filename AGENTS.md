@@ -39,11 +39,19 @@ User Encoding
 - Encoders: `encodeUserInfo28` and `encodeUserInfo72`.
   - `name`: ASCII only, padded with `\0`; UDP 8 chars; TCP 24 chars.
   - `password`: ASCII; UDP 5 chars; TCP 8 chars.
-  - `userId` (device user-id): UDP path is 32-bit numeric (falls back to `uid`), TCP is 9-byte ASCII.
-  - `uid`: 16-bit LE (1–65534 usable). Group ops (`CMD_USERGRP_RRQ/WRQ`) carry the **full uid as u32** — a ZKAccess capture on ZEM760 fw 6.60 shows `d2040000 02` for uid 1234 → group 2, and full-uid reads were verified on hardware. (An earlier encoder bug truncated the uid to one byte here; the old "keep uid ≤ 255 for group ops" advice stemmed from that bug, not from the protocol.)
+  - `userId` (device user-id): UDP path is 32-bit numeric (falls back to `uid` when non-numeric — this is the SSR→compact round-trip path and is intentional), TCP is 9-byte ASCII. Both encoders now reject values that would be silently mangled: over 9 chars or non-ASCII on TCP, non-integer/negative/over `0xFFFFFFFF` on UDP. Use ≤ 9 numeric digits for a scheme that is valid on both transports.
+  - `uid`: 16-bit LE (1–65534 usable) — the user-table slot index, **not** a business identifier. Both encoders reject anything outside that range (`encodeUserInfo72: uid must be an integer between 1 and 65534`) rather than clamping; identifiers larger than 65534 belong in `userId`. Group ops (`CMD_USERGRP_RRQ/WRQ`) carry the **full uid as u32** — a ZKAccess capture on ZEM760 fw 6.60 shows `d2040000 02` for uid 1234 → group 2, and full-uid reads were verified on hardware. (An earlier encoder bug truncated the uid to one byte here; the old "keep uid ≤ 255 for group ops" advice stemmed from that bug, not from the protocol.)
   - `groupNumber` (1–100), `cardNumber` (u32), `enabled` and `role` encoded into a `permissionToken`.
   - Timezone flags for SSR (72B): `userTimezoneFlag`, `useGroupTimezones`, and per-user `timezones` (3 slots).
 - Decoders: `decodeUserData28`, `decodeUserData72`.
+- **Per-user validity/expiry dates are NOT synced to the standalone device** (ZEM760 fw Ver 6.60, captured from a real ZKAccess sync). ZKAccess exposes them under *Personal → Usuarios → Editar → Niveles de acceso* as "Establecer validez" + "Fecha inicial"/"Fecha final", but checking it and setting 13/08/2026 → 16/08/2026 produced **no date bytes on the wire**. Verified three ways:
+  - All 85 PC→device commands in the session were decoded and searched for both dates in 12 encodings — the packed u32 of `parseTimeToDate`, the 6-byte y/m/d/h/m/s of `parseHexToTime`, Unix LE/BE, days-since-2000 (u32/u16), `YYYYMMDD` as int, `y-2000`/m/d bytes, and three ASCII forms. Zero hits.
+  - The user write (`CMD_PREPARE_DATA` + `CMD_DATA`, 41 bytes) is fully accounted for: `02` (group), `01`, ASCII `"1234"`/`"German"`, `1d` (=29, record length), trailing `512`/`1`. No room for a date in any encoding.
+  - ZKAccess's own post-sync read-back (`CMD_DATA_WRRQ` → 4×28B records) differs from the pre-sync read by exactly 5 bytes on the edited user: password `"1"`→`"1234"` (bytes 4–6), a stray `1d` in the name tail (byte 15), and group `01`→`02` (byte 21, `compactData[5]`). Other users byte-identical.
+  - What *did* sync from that same dialog: the access level ("general" / 24-Hour-Accessible) as `CMD_USERTZ_WRQ` `uid=1, flag=1, tz1=1`, and the multi-user group inside the user record.
+  - So validity is a ZKAccess server-side concept, like the holiday flag (see `compact20` below). **Applications must enforce expiry themselves** — track the window and push `setUser({ ...current, enabled: false })` or `deleteUser(uid)` + `refreshData()` at the boundary. Do not add validity fields to the user encoders without a capture showing them on the wire.
+  - Caveat: single-state capture (validity checked); no "unchecked" baseline was taken. The byte-level accounting above is what carries the conclusion.
+- Incidental hardware confirmations from that same capture: `CMD_GET_PINWIDTH` replies `09`, i.e. the device itself reports the 9-character `userId` width; and a live record carries `uid 2` with `userId 300000`, confirming that large ids are fine in `userId` but not in `uid`.
 
 Timezone Encoding
 - `encodeTimezoneInfo({ index, days|schedule, default })` → 32 bytes

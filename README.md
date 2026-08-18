@@ -100,6 +100,12 @@ test()
 
 Applications can create, edit, and delete device users directly through the public facade. `setUser(info)` is an upsert: passing an existing `uid` updates that user, and passing a new `uid` creates it. Call `refreshData()` after writes so the device persists and applies the change.
 
+`uid` is the device's user-table slot index and is carried as a 16-bit field, so it must be an integer in **1–65534**; `setUser` throws for anything outside that range. It is not a place for application-side identifiers — use `userId` for those. Note this ceiling is separate from the device's record capacity (commonly ~30K users), so both limits apply.
+
+`userId` is the device-facing PIN, and its width depends on the transport: **9 ASCII characters** in the TCP/SSR record, **32-bit numeric** in the UDP/compact record. `setUser` throws rather than truncating or clamping, so an id that is too long fails loudly instead of colliding with another user on the device. For an identifier that is valid on both transports, use **at most 9 numeric digits** (max `999999999`). A non-numeric `userId` written to a compact device still falls back to `uid`, which is what allows a user read from an SSR device to be written back to a compact one.
+
+**There is no per-user validity/expiry date.** ZKAccess offers "Establecer validez" with a start and end date on the user's *Niveles de acceso* tab, but a packet capture on ZEM760 fw 6.60 shows those dates are never sent to the device — they are enforced by ZKAccess itself, not by the panel. Applications that need expiry must enforce it: track the window in your own store and, at the boundary, push `setUser({ ...current, enabled: false })` or `deleteUser(uid)` followed by `refreshData()`. Timezones are not a substitute — they are weekly recurring day/time windows, not calendar ranges. See `AGENTS.md` for the capture details.
+
 ```js
 const ZKLib = require('node-zklib');
 
