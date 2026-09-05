@@ -217,7 +217,7 @@ The high‑level API maps to zk‑protocol commands as follows:
 | Method | Command(s) | Notes |
 | --- | --- | --- |
 | `getInfo()` | `CMD_GET_FREE_SIZES` | Returns user/log counts and capacities. |
-| `getUsers()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_USERS` | Streams user records; decoder handles 28B (UDP) or 72B (TCP). |
+| `getUsers()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_USERS` | Streams user records; decoder handles 28B (UDP) or 72B (TCP). Returns an empty list on a device with no users — such devices answer the request with `CMD_ACK_ERROR`. |
 | `setUser(info)` | `CMD_USER_WRQ` | Uses `encodeUserInfo28` (UDP) or `encodeUserInfo72` (SSR/TCP) based on payload. |
 | `deleteUser(uid)` | `CMD_DELETE_USER` | 16‑bit uid. |
 | `getAttendances()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS` | Streams stored attendance logs. Auto-detects the record size (40B SSR / 16B compact / 8B legacy) and returns normalized `{ userSn, deviceUserId, recordTime, status, punch, denied, ip }`. On compact firmware `status` is an access-result code (0=granted, 7=denied) and `denied` is derived from it. |
