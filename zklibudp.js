@@ -26,18 +26,12 @@ const {
   toUInt16
 } = require('./utils')
 
-const { MAX_CHUNK, REQUEST_DATA, COMMANDS } = require('./constants')
+const { MAX_CHUNK, REQUEST_DATA, COMMANDS, TERMINAL_ACKS } = require('./constants')
 
 const { log } = require('./helpers/errorLog')
 const groupTimezonesHelper = require('./helpers/groupTimezones')
 const unlockGroupsHelper = require('./helpers/unlockGroups')
 
-// Same table as zklibtcp.js, and it has to be here too: UDP is the default
-// transport, so a stall fixed only on TCP is a stall for most installs.
-const TERMINAL_ACKS = {
-  [COMMANDS.CMD_ACK_ERROR]: 'CMD_ACK_ERROR',
-  [COMMANDS.CMD_ACK_UNAUTH]: 'CMD_ACK_UNAUTH'
-}
 
 class ZKLibUDP {
   constructor(ip, port, timeout, inport, options = {}) {
@@ -174,6 +168,18 @@ class ZKLibUDP {
       }
 
       const handleOnData = (data) => {
+        // **Before anything reads a field out of it.** A datagram too short to hold
+        // an 8-byte header makes checkNotEventUDP read replyId past the end and
+        // throw a RangeError inside a 'message' listener — an uncaught exception
+        // that takes the main process down. The socket accepts from any source,
+        // with no session and no auth, so four bytes from anywhere on the network
+        // were enough. The TCP path was already safe.
+        if (!Buffer.isBuffer(data) || data.length < 8) {
+          this.logger.debug('request data ignored a datagram too short to be a reply', {
+            length: Buffer.isBuffer(data) ? data.length : null
+          })
+          return;
+        }
         this.logger.trace('request data message received', this.logger.formatBuffer(data))
         if (checkNotEventUDP(data)) {
           this.logger.debug('request data ignored realtime event')
@@ -181,7 +187,7 @@ class ZKLibUDP {
         }
         clearTimeout(sendTimeoutId)
 
-        if (Buffer.isBuffer(data) && data.length >= 8) {
+        {
           const header = decodeUDPHeader(data.subarray(0, 8))
           if (TERMINAL_ACKS[header.commandId]) {
             // The device answered and nothing more is coming. Without this the

@@ -1,5 +1,5 @@
 const net = require('net')
-const { MAX_CHUNK, COMMANDS, REQUEST_DATA } = require('./constants')
+const { MAX_CHUNK, COMMANDS, REQUEST_DATA, TERMINAL_ACKS } = require('./constants')
 const { createLogger } = require('./helpers/logger')
 const { createTCPHeader,
   exportErrorMessage,
@@ -34,13 +34,6 @@ const unlockGroupsHelper = require('./helpers/unlockGroups')
 const USER_PACKET_SIZE_28 = 28
 const USER_PACKET_SIZE_72 = 72
 
-// Replies that end a data request: the device has answered, and nothing more is
-// coming. Without a terminal case these stalled until the timeout and were all
-// reported as TIMEOUT_ON_RECEIVING_REQUEST_DATA, whatever actually happened.
-const TERMINAL_ACKS = {
-  [COMMANDS.CMD_ACK_ERROR]: 'CMD_ACK_ERROR',
-  [COMMANDS.CMD_ACK_UNAUTH]: 'CMD_ACK_UNAUTH'
-}
 
 const isPrintable = (value) => /^[\x20-\x7E]*$/.test(String(value || ''))
 
