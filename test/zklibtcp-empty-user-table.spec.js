@@ -86,6 +86,67 @@ describe('ZKLibTCP against an empty user table', () => {
     expect(caught.code).to.equal('CMD_ACK_ERROR');
   });
 
+  // R1, and the reason the other cases could not see it: they stub getInfo at the
+  // method boundary, so decodeFreeSizes never runs. decodeFreeSizes' word() returns
+  // *null* for a field a short reply does not carry, and Number(null) === 0 — so a
+  // truncated or stolen reply read as a confident "no users". An empty read makes
+  // the apply pass rewrite every credential, so this fails in the expensive
+  // direction.
+  it('does not read a truncated free-sizes reply as an empty user table', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 5000);
+    zk.socket = fakeSocket(ackErrorFrame());
+    sinon.stub(zk, 'freeData').resolves(Buffer.alloc(0));
+    // Short enough that decodeFreeSizes cannot reach the user-count word — the shape
+    // a realtime frame resolving getInfo would produce, since writeMessage has no
+    // event filter.
+    sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(12));
+
+    let caught = null;
+    try {
+      await zk.getUsers();
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught, 'a missing count is not a zero count').to.be.instanceOf(Error);
+    expect(caught.code).to.equal('CMD_ACK_ERROR');
+  });
+
+  it('rejects a data request the device refuses for want of authorisation', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 5000);
+    zk.socket = fakeSocket(createTCPHeader(COMMANDS.CMD_ACK_UNAUTH, 0, 1, Buffer.alloc(0)));
+
+    const startedAt = Date.now();
+    let caught = null;
+    try {
+      await zk.requestData(Buffer.alloc(16));
+    } catch (err) {
+      caught = err;
+    }
+
+    // A session that lost its authorisation mid-read reported as a timeout too,
+    // which is the same misdiagnosis one constant over.
+    expect(caught.code).to.equal('CMD_ACK_UNAUTH');
+    expect(Date.now() - startedAt).to.be.lessThan(1000);
+  });
+
+  it('does not treat an unauthorised refusal as an empty user table', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 5000);
+    zk.socket = fakeSocket(createTCPHeader(COMMANDS.CMD_ACK_UNAUTH, 0, 1, Buffer.alloc(0)));
+    sinon.stub(zk, 'freeData').resolves(Buffer.alloc(0));
+    const getInfo = sinon.stub(zk, 'getInfo').resolves({ userCounts: 0 });
+
+    let caught = null;
+    try {
+      await zk.getUsers();
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught.code).to.equal('CMD_ACK_UNAUTH');
+    expect(getInfo.called, 'only a refusal means "maybe empty"').to.equal(false);
+  });
+
   it('reports the original refusal when the device cannot say how many users it has', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 5000);
     zk.socket = fakeSocket(ackErrorFrame());

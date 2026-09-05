@@ -34,6 +34,14 @@ const unlockGroupsHelper = require('./helpers/unlockGroups')
 const USER_PACKET_SIZE_28 = 28
 const USER_PACKET_SIZE_72 = 72
 
+// Replies that end a data request: the device has answered, and nothing more is
+// coming. Without a terminal case these stalled until the timeout and were all
+// reported as TIMEOUT_ON_RECEIVING_REQUEST_DATA, whatever actually happened.
+const TERMINAL_ACKS = {
+  [COMMANDS.CMD_ACK_ERROR]: 'CMD_ACK_ERROR',
+  [COMMANDS.CMD_ACK_UNAUTH]: 'CMD_ACK_UNAUTH'
+}
+
 const isPrintable = (value) => /^[\x20-\x7E]*$/.test(String(value || ''))
 
 const scoreDecodedUser = (user) => {
@@ -283,15 +291,15 @@ class ZKLibTCP {
           timer = setTimeout(()=>{
             internalCallback(replyBuffer)
           }, 1000)
-        }else if(header.commandId === COMMANDS.CMD_ACK_ERROR){
-          // The device refused the data request, and it is not going to say more.
-          // Waiting the full timeout here is what turned an immediate, specific
-          // refusal into TIMEOUT_ON_RECEIVING_REQUEST_DATA — the pair seen on a
-          // terminal whose user table is simply empty.
-          return internalReject(Object.assign(
-            new Error('CMD_ACK_ERROR'),
-            { code: 'CMD_ACK_ERROR' }
-          ))
+        }else if(TERMINAL_ACKS[header.commandId]){
+          // The device answered and is not going to say more. Waiting the full
+          // timeout here is what turned an immediate, specific refusal into
+          // TIMEOUT_ON_RECEIVING_REQUEST_DATA — the pair seen on a terminal whose
+          // user table is simply empty. CMD_ACK_UNAUTH is the same stall with a
+          // different cause: a session that lost its authorisation mid-read was
+          // reported as a timeout too.
+          const code = TERMINAL_ACKS[header.commandId]
+          return internalReject(Object.assign(new Error(code), { code }))
         }else{
           timer = setTimeout(() => {
             internalReject(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'))
@@ -558,7 +566,12 @@ class ZKLibTCP {
       if (err && err.code === 'CMD_ACK_ERROR') {
         try {
           const info = await this.getInfo()
-          if (info && Number(info.userCounts) === 0) {
+          // Strict, and deliberately so: decodeFreeSizes' word() returns null when
+          // the reply is too short to hold the field, and Number(null) === 0. A
+          // truncated or stolen reply would otherwise read as a confident "no
+          // users", and an empty read makes the apply pass rewrite every
+          // credential. Only a real zero counts.
+          if (info && info.userCounts === 0) {
             return { data: [], err: null }
           }
         } catch (infoErr) {

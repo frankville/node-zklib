@@ -32,6 +32,13 @@ const { log } = require('./helpers/errorLog')
 const groupTimezonesHelper = require('./helpers/groupTimezones')
 const unlockGroupsHelper = require('./helpers/unlockGroups')
 
+// Same table as zklibtcp.js, and it has to be here too: UDP is the default
+// transport, so a stall fixed only on TCP is a stall for most installs.
+const TERMINAL_ACKS = {
+  [COMMANDS.CMD_ACK_ERROR]: 'CMD_ACK_ERROR',
+  [COMMANDS.CMD_ACK_UNAUTH]: 'CMD_ACK_UNAUTH'
+}
+
 class ZKLibUDP {
   constructor(ip, port, timeout, inport, options = {}) {
     this.ip = ip
@@ -173,6 +180,20 @@ class ZKLibUDP {
           return;
         }
         clearTimeout(sendTimeoutId)
+
+        if (Buffer.isBuffer(data) && data.length >= 8) {
+          const header = decodeUDPHeader(data.subarray(0, 8))
+          if (TERMINAL_ACKS[header.commandId]) {
+            // The device answered and nothing more is coming. Without this the
+            // reply sat below the 13-byte bar and waited out the timeout, so an
+            // empty user table and a lost session both reported as
+            // TIMEOUT_ON_RECEIVING_REQUEST_DATA.
+            this.socket.removeListener('message', handleOnData)
+            const code = TERMINAL_ACKS[header.commandId]
+            return reject(Object.assign(new Error(code), { code }))
+          }
+        }
+
         sendTimeoutId = setTimeout(() => {
           reject(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'))
         }, this.timeout)
@@ -405,6 +426,22 @@ class ZKLibUDP {
     try {
       data = await this.readWithBuffer(REQUEST_DATA.GET_USERS)
     } catch (err) {
+      // Same disambiguation as the TCP path: a device with no users refuses the
+      // data request, which is indistinguishable from a real refusal until you
+      // ask it how many users it has. Strict === 0, because decodeFreeSizes
+      // returns null for a field a short reply does not carry.
+      if (err && err.code === 'CMD_ACK_ERROR') {
+        try {
+          const info = await this.getInfo()
+          if (info && info.userCounts === 0) {
+            return { data: [], err: null }
+          }
+        } catch (infoErr) {
+          this.logger.debug('could not confirm whether the user table is empty', {
+            error: infoErr && infoErr.message ? infoErr.message : infoErr
+          })
+        }
+      }
       return Promise.reject(err)
     }
 
