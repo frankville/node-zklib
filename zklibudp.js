@@ -9,6 +9,7 @@ const {
   decodeUDPHeader,
   exportErrorMessage,
   checkNotEventUDP,
+  isWellFormedUDPFrame,
   encodeUserInfo72,
   encodeUserInfo28,
   encodeTimezoneInfo,
@@ -174,7 +175,7 @@ class ZKLibUDP {
         // that takes the main process down. The socket accepts from any source,
         // with no session and no auth, so four bytes from anywhere on the network
         // were enough. The TCP path was already safe.
-        if (!Buffer.isBuffer(data) || data.length < 8) {
+        if (!isWellFormedUDPFrame(data)) {
           this.logger.debug('request data ignored a datagram too short to be a reply', {
             length: Buffer.isBuffer(data) ? data.length : null
           })
@@ -367,6 +368,7 @@ class ZKLibUDP {
 
 
           const handleOnData = (reply) => {
+            if (!isWellFormedUDPFrame(reply)) return;
             if (checkNotEventUDP(reply)) return;
             clearTimeout(timer)
             timer = setTimeout(() => {
@@ -750,6 +752,17 @@ class ZKLibUDP {
     });
 
     this.socket.on('message', (data) => {
+      // The same runt guard, and this is the handler that matters most: it is
+      // attached for the whole session rather than for one read, on every install
+      // with a listening device. The try/catch below already anticipated malformed
+      // input — it just starts one line too late to cover the header read.
+      if (!isWellFormedUDPFrame(data)) {
+        this.logger.debug('realtime ignored a datagram too short to be an event', {
+          length: Buffer.isBuffer(data) ? data.length : null
+        })
+        return;
+      }
+
       this.logger.trace('realtime raw message', this.logger.formatBuffer(data))
 
       if (!checkNotEventUDP(data)) {
