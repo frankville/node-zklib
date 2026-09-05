@@ -66,6 +66,10 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
 
     try {
       await zk.setUser(baseUser);
+      // Mark for cleanup as soon as the write is accepted, not after the
+      // assertions below. Gating it on a later assertion means a readback
+      // failure leaves the test user on the device for the next person.
+      created = true;
       await zk.refreshData();
       const usersAfterCreate = unwrapUsers(await zk.getUsers());
       const createdUser = usersAfterCreate.find(
@@ -74,7 +78,6 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
       expect(createdUser, 'user should be present after creation').to.exist;
       expect(createdUser.password, 'password should be readable after creation').to.equal(baseUser.password);
       expect(createdUser.enabled, 'user should be enabled after creation').to.equal(true);
-      created = true;
 
       await zk.setUser({
         ...createdUser,
