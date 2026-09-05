@@ -283,6 +283,15 @@ class ZKLibTCP {
           timer = setTimeout(()=>{
             internalCallback(replyBuffer)
           }, 1000)
+        }else if(header.commandId === COMMANDS.CMD_ACK_ERROR){
+          // The device refused the data request, and it is not going to say more.
+          // Waiting the full timeout here is what turned an immediate, specific
+          // refusal into TIMEOUT_ON_RECEIVING_REQUEST_DATA — the pair seen on a
+          // terminal whose user table is simply empty.
+          return internalReject(Object.assign(
+            new Error('CMD_ACK_ERROR'),
+            { code: 'CMD_ACK_ERROR' }
+          ))
         }else{
           timer = setTimeout(() => {
             internalReject(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'))
@@ -541,6 +550,23 @@ class ZKLibTCP {
       data = await this.readWithBuffer(REQUEST_DATA.GET_USERS)
  
     } catch (err) {
+      // A device with no users answers the data request with CMD_ACK_ERROR, which
+      // is indistinguishable from a genuine refusal until you ask it how many
+      // users it has. Asked only on this path, so a normal read costs nothing
+      // extra — and if the device cannot answer that either, the original
+      // refusal is what gets reported, not the disambiguation's failure.
+      if (err && err.code === 'CMD_ACK_ERROR') {
+        try {
+          const info = await this.getInfo()
+          if (info && Number(info.userCounts) === 0) {
+            return { data: [], err: null }
+          }
+        } catch (infoErr) {
+          this.logger.debug('could not confirm whether the user table is empty', {
+            error: infoErr && infoErr.message ? infoErr.message : infoErr
+          })
+        }
+      }
       return Promise.reject(err)
     }
 
