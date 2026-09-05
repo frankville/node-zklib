@@ -28,10 +28,14 @@ class ZKError {
     }
 
     getError(){
+        // `this.err` is whatever the transport threw. It is normally an Error, but a
+        // nullish one must not turn a serialisation into a throw — toJSON() runs on
+        // paths whose whole job is reporting a failure that already happened.
+        const err = this.err || {}
         return {
             err: {
-                message: this.err.message,
-                code: this.err.code
+                message: err.message,
+                code: err.code
             },
             ip: this.ip,
             command : this.command

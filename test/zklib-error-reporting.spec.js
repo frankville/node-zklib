@@ -188,6 +188,13 @@ describe('ZKLib names the command that failed', () => {
     expect(serialised.err.code).to.equal('ECONNRESET');
   });
 
+  it('serialises rather than throwing when there is no underlying error', () => {
+    const bare = new ZKError(null, '[TCP] getUsers', '127.0.0.1');
+
+    expect(() => JSON.stringify(bare)).to.not.throw();
+    expect(JSON.parse(JSON.stringify(bare)).command).to.equal('[TCP] getUsers');
+  });
+
   it('names the command on the UDP path too', async () => {
     const zk = new ZKLib('127.0.0.1', 4370, 1000, 'udp', 5500);
     zk.zklibUdp.socket = {};
