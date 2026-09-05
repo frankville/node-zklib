@@ -154,15 +154,24 @@ class ZKLib {
 
                 }catch(err){
                     this.logger.error('tcp connect failed', { error: err && err.message ? err.message : err })
+                    // Captured *before* the teardown, and compared after. The close event
+                    // nulls the socket a tick later, leaving a window where a destroyed
+                    // socket still reads as connected — which is exactly what callers use
+                    // to decide they need not reconnect, so the failure path has to clear
+                    // it itself. But disconnect() below can take ~4 s (CMD_EXIT's 2000 ms
+                    // timeout plus closeSocket's 2000 ms fallback), createSocket has no
+                    // in-flight guard, and a dozen unserialised callers share one instance:
+                    // in that window another caller opens and connects a *new* socket.
+                    // Nulling blindly would orphan it — connected, unreferenced, never sent
+                    // CMD_EXIT — which is a leaked session slot on the terminal.
+                    const failedSocket = this.zklibTcp.socket
                     try{
                         await this.zklibTcp.disconnect()
                     }catch(err){}
 
-                    // The close event nulls the socket a tick later, leaving a
-                    // window where a destroyed socket still reads as connected —
-                    // which is exactly what callers use to decide they need not
-                    // reconnect. The UDP branch below already clears it eagerly.
-                    this.zklibTcp.socket = null
+                    if(this.zklibTcp.socket === failedSocket){
+                        this.zklibTcp.socket = null
+                    }
         
                     // ECONNREFUSED used to be swallowed here: the function returned
                     // undefined, so callers saw a successful connect with no socket

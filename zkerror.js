@@ -37,6 +37,15 @@ class ZKError {
             command : this.command
         }
     }
+
+    // ZKError is not an Error subclass, and `this.err.message`/`.code` are
+    // non-enumerable — so JSON.stringify(zkError) yielded `{"err":{}, ...}` and
+    // dropped the cause at every consumer that logs or rethrows a stringified
+    // error. Naming the command that failed is only half the legibility fix;
+    // this is the other half, and it needs no change on the consumer side.
+    toJSON(){
+        return this.getError()
+    }
 }
 
 

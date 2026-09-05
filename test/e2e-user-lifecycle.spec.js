@@ -63,6 +63,7 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
     };
 
     let created = false;
+    let completed = false;
 
     try {
       await zk.setUser(baseUser);
@@ -93,15 +94,25 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
       expect((updatedUser.name || '').replace(/\0+$/, '').trim()).to.equal('E2EUSR2');
       expect(updatedUser.password, 'password should survive read-modify-write update').to.equal(baseUser.password);
       expect(updatedUser.enabled, 'enabled flag should survive read-modify-write update').to.equal(true);
+      completed = true;
     } finally {
       if (created) {
+        // The delete runs whatever happened — that is the whole point of the flag
+        // being set as soon as the write is accepted.
         await zk.deleteUser(uid).catch(() => {});
         await zk.refreshData().catch(() => {});
-        const usersAfterDelete = unwrapUsers(await zk.getUsers());
-        const stillExists = usersAfterDelete.some(
-          (user) => Number(user.uid ?? user.user_sn ?? user.userSn) === uid
-        );
-        expect(stillExists).to.equal(false);
+        // The assertion does not. An assertion that throws inside `finally`
+        // *replaces* the in-flight exception, so on a contended terminal — where
+        // the delete or the re-read is also likely to fail — a readback failure
+        // would be reported as `expected true to equal false` instead of as the
+        // assertion that actually failed.
+        if (completed) {
+          const usersAfterDelete = unwrapUsers(await zk.getUsers());
+          const stillExists = usersAfterDelete.some(
+            (user) => Number(user.uid ?? user.user_sn ?? user.userSn) === uid
+          );
+          expect(stillExists).to.equal(false);
+        }
       }
     }
   });

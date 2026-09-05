@@ -293,7 +293,11 @@ class ZKLibUDP {
       try {
         reply = await this.requestData(buf)
       } catch (err) {
-        reject(err)
+        // Same as the TCP path: without the return, execution falls through to
+        // reply.subarray() with reply still null, and the TypeError surfaces as
+        // an unhandled rejection. UDP is the default transport, so this is the
+        // one that reaches an unswitched install.
+        return reject(err)
       }
 
       const header = decodeUDPHeader(reply.subarray(0, 8))
