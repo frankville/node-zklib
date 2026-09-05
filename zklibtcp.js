@@ -411,7 +411,11 @@ class ZKLibTCP {
         reply = await this.requestData(buf)
 
       } catch (err) {
-        reject(err)
+        // Without the return, execution falls through to reply.subarray() with
+        // reply still null. The TypeError is thrown inside an already-settled
+        // promise executor, so it surfaces as an unhandled rejection instead of
+        // a failed call.
+        return reject(err)
       }
 
       const header = decodeTCPHeader(reply.subarray(0, 16))
