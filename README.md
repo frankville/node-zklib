@@ -147,7 +147,7 @@ const direct = await zk.getUserTimezones(123);
 
 Compact access-control devices may read back user timezone mode as a 32-bit flag. `1` means user-level timezones, while values such as `0xfffffffe` mean group-inherited timezones. The decoder normalizes those variants and hides sentinel timezone slots like `0xffff`.
 
-TCP devices may use either 72-byte SSR user records or compact 28-byte records. `getUsers()` detects the record size and reuses it for later writes. If an application needs to create a user over TCP before listing users, pass `{ userPacketSize: 28 }` for compact devices:
+TCP devices may use either 72-byte SSR user records or compact 28-byte records. `getUsers()` detects the record size and reuses it for later writes. On a device with **no users** there is nothing to detect from, so `setUser()` asks the device directly via the `~SSR` option before its first write — a compact device ACKs a 72-byte write and stores an unusable record, so guessing is not safe. You can still state the layout explicitly, which skips the probe:
 
 ```js
 const zk = new ZKLib('192.168.1.75', 4370, 10000, 'tcp', undefined, 0, {

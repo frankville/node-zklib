@@ -685,6 +685,38 @@ class ZKLibTCP {
     return await this.executeCmd(COMMANDS.CMD_CLEAR_ATTLOG, '')
   }
 
+  /**
+   * The user record layout, without needing a user to already exist.
+   *
+   * `getUsers()` learns the layout by scoring decoded records, which works only on a
+   * device that has some. On an empty one the first write is otherwise a guess, and
+   * guessing wrong is expensive rather than loud: a ZEM760 stores 28-byte records and
+   * ACKs a 72-byte write, which lands with an empty password and `enabled: false`.
+   * The credential does not work, and a reconciliation loop rewrites it on every pass
+   * because the read-back never matches.
+   *
+   * ZKAccess reads device options before writing. `~SSR` reports the layout directly:
+   * `1` is the 72-byte SSR record, `0` the compact 28-byte one. Devices that do not
+   * answer keep the previous default.
+   */
+  async detectUserPacketSize() {
+    if (this.userPacketSize) return this.userPacketSize
+
+    try {
+      const reported = await this.getDeviceOption('~SSR')
+      const value = reported === null || reported === undefined ? '' : String(reported).trim()
+      if (value === '1') this.userPacketSize = USER_PACKET_SIZE_72
+      else if (value === '0') this.userPacketSize = USER_PACKET_SIZE_28
+      this.logger.debug('user record layout probed', { ssr: value, userPacketSize: this.userPacketSize })
+    } catch (err) {
+      this.logger.debug('user record layout could not be probed', {
+        error: err && err.message ? err.message : err
+      })
+    }
+
+    return this.userPacketSize
+  }
+
 	  async setUser(userInfo = {}) {
 	    const explicitPacketSize = userInfo && (
 	      userInfo.packetSize === USER_PACKET_SIZE_28 || userInfo.format === 'legacy'
@@ -693,6 +725,11 @@ class ZKLibTCP {
 	          ? USER_PACKET_SIZE_72
 	          : null
 	    );
+	    // Only when nothing else knows: an explicit size wins, and a size already
+	    // learned from a read wins. So this costs one command once per device.
+	    if (!explicitPacketSize && !this.userPacketSize && !Buffer.isBuffer(userInfo)) {
+	      await this.detectUserPacketSize();
+	    }
 	    const selectedPacketSize = explicitPacketSize || this.userPacketSize || USER_PACKET_SIZE_72;
 	    const useLegacyPacket = selectedPacketSize === USER_PACKET_SIZE_28;
 	    const encoder = useLegacyPacket ? encodeUserInfo28 : encodeUserInfo72;
