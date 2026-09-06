@@ -63,9 +63,14 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
     };
 
     let created = false;
+    let completed = false;
 
     try {
       await zk.setUser(baseUser);
+      // Mark for cleanup as soon as the write is accepted, not after the
+      // assertions below. Gating it on a later assertion means a readback
+      // failure leaves the test user on the device for the next person.
+      created = true;
       await zk.refreshData();
       const usersAfterCreate = unwrapUsers(await zk.getUsers());
       const createdUser = usersAfterCreate.find(
@@ -74,7 +79,6 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
       expect(createdUser, 'user should be present after creation').to.exist;
       expect(createdUser.password, 'password should be readable after creation').to.equal(baseUser.password);
       expect(createdUser.enabled, 'user should be enabled after creation').to.equal(true);
-      created = true;
 
       await zk.setUser({
         ...createdUser,
@@ -90,15 +94,25 @@ maybeDescribe('ZKLib user lifecycle (e2e)', function () {
       expect((updatedUser.name || '').replace(/\0+$/, '').trim()).to.equal('E2EUSR2');
       expect(updatedUser.password, 'password should survive read-modify-write update').to.equal(baseUser.password);
       expect(updatedUser.enabled, 'enabled flag should survive read-modify-write update').to.equal(true);
+      completed = true;
     } finally {
       if (created) {
+        // The delete runs whatever happened — that is the whole point of the flag
+        // being set as soon as the write is accepted.
         await zk.deleteUser(uid).catch(() => {});
         await zk.refreshData().catch(() => {});
-        const usersAfterDelete = unwrapUsers(await zk.getUsers());
-        const stillExists = usersAfterDelete.some(
-          (user) => Number(user.uid ?? user.user_sn ?? user.userSn) === uid
-        );
-        expect(stillExists).to.equal(false);
+        // The assertion does not. An assertion that throws inside `finally`
+        // *replaces* the in-flight exception, so on a contended terminal — where
+        // the delete or the re-read is also likely to fail — a readback failure
+        // would be reported as `expected true to equal false` instead of as the
+        // assertion that actually failed.
+        if (completed) {
+          const usersAfterDelete = unwrapUsers(await zk.getUsers());
+          const stillExists = usersAfterDelete.some(
+            (user) => Number(user.uid ?? user.user_sn ?? user.userSn) === uid
+          );
+          expect(stillExists).to.equal(false);
+        }
       }
     }
   });

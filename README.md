@@ -147,7 +147,7 @@ const direct = await zk.getUserTimezones(123);
 
 Compact access-control devices may read back user timezone mode as a 32-bit flag. `1` means user-level timezones, while values such as `0xfffffffe` mean group-inherited timezones. The decoder normalizes those variants and hides sentinel timezone slots like `0xffff`.
 
-TCP devices may use either 72-byte SSR user records or compact 28-byte records. `getUsers()` detects the record size and reuses it for later writes. If an application needs to create a user over TCP before listing users, pass `{ userPacketSize: 28 }` for compact devices:
+TCP devices may use either 72-byte SSR user records or compact 28-byte records. `getUsers()` detects the record size and reuses it for later writes. On a device with **no users** there is nothing to detect from, so `setUser()` asks the device directly via the `~SSR` option before its first write — a compact device ACKs a 72-byte write and stores an unusable record, so guessing is not safe. You can still state the layout explicitly, which skips the probe:
 
 ```js
 const zk = new ZKLib('192.168.1.75', 4370, 10000, 'tcp', undefined, 0, {
@@ -217,7 +217,7 @@ The high‑level API maps to zk‑protocol commands as follows:
 | Method | Command(s) | Notes |
 | --- | --- | --- |
 | `getInfo()` | `CMD_GET_FREE_SIZES` | Returns user/log counts and capacities. |
-| `getUsers()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_USERS` | Streams user records; decoder handles 28B (UDP) or 72B (TCP). |
+| `getUsers()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_USERS` | Streams user records; decoder handles 28B (UDP) or 72B (TCP). Returns an empty list on a device with no users — such devices answer the request with `CMD_ACK_ERROR`. |
 | `setUser(info)` | `CMD_USER_WRQ` | Uses `encodeUserInfo28` (UDP) or `encodeUserInfo72` (SSR/TCP) based on payload. |
 | `deleteUser(uid)` | `CMD_DELETE_USER` | 16‑bit uid. |
 | `getAttendances()` | `CMD_DATA_WRRQ` + `REQUEST_DATA.GET_ATTENDANCE_LOGS` | Streams stored attendance logs. Auto-detects the record size (40B SSR / 16B compact / 8B legacy) and returns normalized `{ userSn, deviceUserId, recordTime, status, punch, denied, ip }`. On compact firmware `status` is an access-result code (0=granted, 7=denied) and `denied` is derived from it. |

@@ -9,6 +9,8 @@ const {
   decodeUDPHeader,
   exportErrorMessage,
   checkNotEventUDP,
+  isWellFormedUDPFrame,
+  readDeviceOptionReply,
   encodeUserInfo72,
   encodeUserInfo28,
   encodeTimezoneInfo,
@@ -26,11 +28,12 @@ const {
   toUInt16
 } = require('./utils')
 
-const { MAX_CHUNK, REQUEST_DATA, COMMANDS } = require('./constants')
+const { MAX_CHUNK, REQUEST_DATA, COMMANDS, TERMINAL_ACKS } = require('./constants')
 
 const { log } = require('./helpers/errorLog')
 const groupTimezonesHelper = require('./helpers/groupTimezones')
 const unlockGroupsHelper = require('./helpers/unlockGroups')
+
 
 class ZKLibUDP {
   constructor(ip, port, timeout, inport, options = {}) {
@@ -167,12 +170,38 @@ class ZKLibUDP {
       }
 
       const handleOnData = (data) => {
+        // **Before anything reads a field out of it.** A datagram too short to hold
+        // an 8-byte header makes checkNotEventUDP read replyId past the end and
+        // throw a RangeError inside a 'message' listener — an uncaught exception
+        // that takes the main process down. The socket accepts from any source,
+        // with no session and no auth, so four bytes from anywhere on the network
+        // were enough. The TCP path was already safe.
+        if (!isWellFormedUDPFrame(data)) {
+          this.logger.debug('request data ignored a datagram too short to be a reply', {
+            length: Buffer.isBuffer(data) ? data.length : null
+          })
+          return;
+        }
         this.logger.trace('request data message received', this.logger.formatBuffer(data))
         if (checkNotEventUDP(data)) {
           this.logger.debug('request data ignored realtime event')
           return;
         }
         clearTimeout(sendTimeoutId)
+
+        {
+          const header = decodeUDPHeader(data.subarray(0, 8))
+          if (TERMINAL_ACKS[header.commandId]) {
+            // The device answered and nothing more is coming. Without this the
+            // reply sat below the 13-byte bar and waited out the timeout, so an
+            // empty user table and a lost session both reported as
+            // TIMEOUT_ON_RECEIVING_REQUEST_DATA.
+            this.socket.removeListener('message', handleOnData)
+            const code = TERMINAL_ACKS[header.commandId]
+            return reject(Object.assign(new Error(code), { code }))
+          }
+        }
+
         sendTimeoutId = setTimeout(() => {
           reject(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'))
         }, this.timeout)
@@ -293,7 +322,11 @@ class ZKLibUDP {
       try {
         reply = await this.requestData(buf)
       } catch (err) {
-        reject(err)
+        // Same as the TCP path: without the return, execution falls through to
+        // reply.subarray() with reply still null, and the TypeError surfaces as
+        // an unhandled rejection. UDP is the default transport, so this is the
+        // one that reaches an unswitched install.
+        return reject(err)
       }
 
       const header = decodeUDPHeader(reply.subarray(0, 8))
@@ -336,6 +369,7 @@ class ZKLibUDP {
 
 
           const handleOnData = (reply) => {
+            if (!isWellFormedUDPFrame(reply)) return;
             if (checkNotEventUDP(reply)) return;
             clearTimeout(timer)
             timer = setTimeout(() => {
@@ -401,6 +435,22 @@ class ZKLibUDP {
     try {
       data = await this.readWithBuffer(REQUEST_DATA.GET_USERS)
     } catch (err) {
+      // Same disambiguation as the TCP path: a device with no users refuses the
+      // data request, which is indistinguishable from a real refusal until you
+      // ask it how many users it has. Strict === 0, because decodeFreeSizes
+      // returns null for a field a short reply does not carry.
+      if (err && err.code === 'CMD_ACK_ERROR') {
+        try {
+          const info = await this.getInfo()
+          if (info && info.userCounts === 0) {
+            return { data: [], err: null }
+          }
+        } catch (infoErr) {
+          this.logger.debug('could not confirm whether the user table is empty', {
+            error: infoErr && infoErr.message ? infoErr.message : infoErr
+          })
+        }
+      }
       return Promise.reject(err)
     }
 
@@ -573,12 +623,20 @@ class ZKLibUDP {
     return await groupTimezonesHelper.setGroupTimezones(this, info, options);
   }
 
+  // Returns null when the device answered about a different option — see
+  // parseDeviceOptionReply. Same rule as the TCP path: this transport pair has
+  // produced a TCP-only fix three times on this branch already.
   async getDeviceOption(name) {
     const reply = await this.executeCmd(COMMANDS.CMD_OPTIONS_RRQ, Buffer.from(`${name}\0`, 'ascii'));
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
     const text = data.toString('ascii').replace(/\0+$/, '');
-    const separator = text.indexOf('=');
-    return separator >= 0 ? text.slice(separator + 1) : text;
+    const result = readDeviceOptionReply(name, text);
+    if (result.value === null) {
+      this.logger.debug('options reply answered a different option', {
+        asked: name, answered: result.answered
+      });
+    }
+    return result.value;
   }
 
   async setDeviceOption(name, value) {
@@ -703,6 +761,17 @@ class ZKLibUDP {
     });
 
     this.socket.on('message', (data) => {
+      // The same runt guard, and this is the handler that matters most: it is
+      // attached for the whole session rather than for one read, on every install
+      // with a listening device. The try/catch below already anticipated malformed
+      // input — it just starts one line too late to cover the header read.
+      if (!isWellFormedUDPFrame(data)) {
+        this.logger.debug('realtime ignored a datagram too short to be an event', {
+          length: Buffer.isBuffer(data) ? data.length : null
+        })
+        return;
+      }
+
       this.logger.trace('realtime raw message', this.logger.formatBuffer(data))
 
       if (!checkNotEventUDP(data)) {

@@ -18,9 +18,11 @@ describe('ZKLibTCP user management helpers', () => {
 
     await zk.setUser({ uid: 17, userId: 'T17', name: 'TCP Test' });
 
-    expect(executeStub.calledOnce).to.equal(true);
-    const [command, data] = executeStub.firstCall.args;
-    expect(command).to.equal(COMMANDS.CMD_USER_WRQ);
+    // Not `calledOnce` any more: with the layout unknown, setUser probes `~SSR`
+    // first, and a device that cannot answer keeps this 72-byte default.
+    const writes = executeStub.getCalls().filter(call => call.args[0] === COMMANDS.CMD_USER_WRQ);
+    expect(writes).to.have.length(1);
+    const data = writes[0].args[1];
     expect(data.length).to.equal(72);
     expect(data.readUInt16LE(0)).to.equal(17);
   });

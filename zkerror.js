@@ -28,14 +28,27 @@ class ZKError {
     }
 
     getError(){
+        // `this.err` is whatever the transport threw. It is normally an Error, but a
+        // nullish one must not turn a serialisation into a throw — toJSON() runs on
+        // paths whose whole job is reporting a failure that already happened.
+        const err = this.err || {}
         return {
             err: {
-                message: this.err.message,
-                code: this.err.code
+                message: err.message,
+                code: err.code
             },
             ip: this.ip,
             command : this.command
         }
+    }
+
+    // ZKError is not an Error subclass, and `this.err.message`/`.code` are
+    // non-enumerable — so JSON.stringify(zkError) yielded `{"err":{}, ...}` and
+    // dropped the cause at every consumer that logs or rethrows a stringified
+    // error. Naming the command that failed is only half the legibility fix;
+    // this is the other half, and it needs no change on the consumer side.
+    toJSON(){
+        return this.getError()
     }
 }
 

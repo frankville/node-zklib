@@ -93,6 +93,14 @@ module.exports.COMMANDS = {
     EF_ALARM:512
 }
 
+// Replies that end a data request: the device has answered and nothing more is
+// coming. Shared by both transports on purpose — every fix on this path that was
+// made for one of them had to be made again for the other.
+module.exports.TERMINAL_ACKS = {
+    [module.exports.COMMANDS.CMD_ACK_ERROR]: 'CMD_ACK_ERROR',
+    [module.exports.COMMANDS.CMD_ACK_UNAUTH]: 'CMD_ACK_UNAUTH'
+}
+
 module.exports.USHRT_MAX = 65535
 
 module.exports.MAX_CHUNK = 65472

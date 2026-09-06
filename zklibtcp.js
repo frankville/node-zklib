@@ -1,5 +1,5 @@
 const net = require('net')
-const { MAX_CHUNK, COMMANDS, REQUEST_DATA } = require('./constants')
+const { MAX_CHUNK, COMMANDS, REQUEST_DATA, TERMINAL_ACKS } = require('./constants')
 const { createLogger } = require('./helpers/logger')
 const { createTCPHeader,
   exportErrorMessage,
@@ -25,7 +25,8 @@ const { createTCPHeader,
   decodeUserGroupInfo,
   decodeUnlockGroupInfo,
   decodeUnlockGroupsInfo,
-  makeCommKey } = require('./utils')
+  makeCommKey,
+  readDeviceOptionReply } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
 const groupTimezonesHelper = require('./helpers/groupTimezones')
@@ -33,6 +34,27 @@ const unlockGroupsHelper = require('./helpers/unlockGroups')
 
 const USER_PACKET_SIZE_28 = 28
 const USER_PACKET_SIZE_72 = 72
+/**
+ * How long to wait before asking again, while the layout is unsettled.
+ *
+ * Bounded in **time** rather than in attempts, because a count is the wrong unit: it
+ * scales with write volume, so a large site exhausts it far faster than a small one
+ * under identical conditions, and nothing about the hazard depends on site size. A
+ * spent count also never recovers — the device can be answering correctly while every
+ * remaining write goes out at the default.
+ *
+ * **The requirement the number has to meet is coverage, not traffic**: it must be
+ * strictly shorter than the caller's reconciliation interval, so every pass begins
+ * with an attempt available. The consumer's apply pass runs at 60 s and is documented
+ * as never going below a minute, so 30 s clears it twofold — and a pass over a
+ * contended device usually runs past 30 s anyway, which buys a second attempt inside
+ * the same pass. Capping the extra traffic at about two commands a minute is the
+ * sanity check on the other side; it is the reason this is not *too small*, not the
+ * reason it is large enough. Raising it on traffic grounds alone would silently cost
+ * a probe per pass.
+ */
+const USER_PACKET_PROBE_INTERVAL_MS = 30000
+
 
 const isPrintable = (value) => /^[\x20-\x7E]*$/.test(String(value || ''))
 
@@ -102,6 +124,10 @@ class ZKLibTCP {
     } else {
       this.userPacketSize = null;
     }
+    // Whether the device has answered about the layout, and when it was last asked
+    // — see detectUserPacketSize().
+    this.userPacketSizeSettled = false;
+    this.userPacketSizeProbedAt = null;
     this.groupTimezoneFormat = normalizeGroupTimezoneFormat(
       options.groupTimezonePacketFormat ?? options.groupTimezoneFormat
     );
@@ -283,6 +309,15 @@ class ZKLibTCP {
           timer = setTimeout(()=>{
             internalCallback(replyBuffer)
           }, 1000)
+        }else if(TERMINAL_ACKS[header.commandId]){
+          // The device answered and is not going to say more. Waiting the full
+          // timeout here is what turned an immediate, specific refusal into
+          // TIMEOUT_ON_RECEIVING_REQUEST_DATA — the pair seen on a terminal whose
+          // user table is simply empty. CMD_ACK_UNAUTH is the same stall with a
+          // different cause: a session that lost its authorisation mid-read was
+          // reported as a timeout too.
+          const code = TERMINAL_ACKS[header.commandId]
+          return internalReject(Object.assign(new Error(code), { code }))
         }else{
           timer = setTimeout(() => {
             internalReject(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'))
@@ -411,7 +446,11 @@ class ZKLibTCP {
         reply = await this.requestData(buf)
 
       } catch (err) {
-        reject(err)
+        // Without the return, execution falls through to reply.subarray() with
+        // reply still null. The TypeError is thrown inside an already-settled
+        // promise executor, so it surfaces as an unhandled rejection instead of
+        // a failed call.
+        return reject(err)
       }
 
       const header = decodeTCPHeader(reply.subarray(0, 16))
@@ -537,6 +576,28 @@ class ZKLibTCP {
       data = await this.readWithBuffer(REQUEST_DATA.GET_USERS)
  
     } catch (err) {
+      // A device with no users answers the data request with CMD_ACK_ERROR, which
+      // is indistinguishable from a genuine refusal until you ask it how many
+      // users it has. Asked only on this path, so a normal read costs nothing
+      // extra — and if the device cannot answer that either, the original
+      // refusal is what gets reported, not the disambiguation's failure.
+      if (err && err.code === 'CMD_ACK_ERROR') {
+        try {
+          const info = await this.getInfo()
+          // Strict, and deliberately so: decodeFreeSizes' word() returns null when
+          // the reply is too short to hold the field, and Number(null) === 0. A
+          // truncated or stolen reply would otherwise read as a confident "no
+          // users", and an empty read makes the apply pass rewrite every
+          // credential. Only a real zero counts.
+          if (info && info.userCounts === 0) {
+            return { data: [], err: null }
+          }
+        } catch (infoErr) {
+          this.logger.debug('could not confirm whether the user table is empty', {
+            error: infoErr && infoErr.message ? infoErr.message : infoErr
+          })
+        }
+      }
       return Promise.reject(err)
     }
 
@@ -649,6 +710,80 @@ class ZKLibTCP {
     return await this.executeCmd(COMMANDS.CMD_CLEAR_ATTLOG, '')
   }
 
+  /**
+   * The user record layout, without needing a user to already exist.
+   *
+   * `getUsers()` learns the layout by scoring decoded records, which works only on a
+   * device that has some. On an empty one the first write is otherwise a guess, and
+   * guessing wrong is expensive rather than loud: a ZEM760 stores 28-byte records and
+   * ACKs a 72-byte write, which lands with an empty password and `enabled: false`.
+   * The credential does not work, and a reconciliation loop rewrites it on every pass
+   * because the read-back never matches.
+   *
+   * ZKAccess reads device options before writing. `~SSR` reports the layout directly:
+   * `1` is the 72-byte SSR record, `0` the compact 28-byte one. Devices that do not
+   * answer keep the previous default.
+   */
+  async detectUserPacketSize() {
+    if (this.userPacketSize) return this.userPacketSize
+    /**
+     * **Permanence is positive, and is never inferred from the shape of a failure.**
+     *
+     * Only a reply the device *attributed* to `~SSR` settles the question. Measured on
+     * a ZEM760: an option it does not implement is still answered `<name>=`, so the one
+     * genuinely permanent failure arrives attributable-and-empty and is remembered
+     * here. Everything else is a broken moment rather than a fact about the firmware —
+     * a reply about another option, a frame carrying no assignment at all, a timeout —
+     * and reply-stealing produces the *missing* reply as readily as the wrong one, so
+     * a throw is no more permanent than a mismatch.
+     *
+     * Remembering any of those pinned the wrong layout for the rest of the session,
+     * which on a compact panel is every subsequent write storing an unusable record.
+     * The retry interval is what keeps those retries from becoming a probe per write.
+     */
+    if (this.userPacketSizeSettled) return this.userPacketSize
+    if (this.userPacketSizeProbedAt !== null
+      && Date.now() - this.userPacketSizeProbedAt < USER_PACKET_PROBE_INTERVAL_MS) {
+      return this.userPacketSize
+    }
+    this.userPacketSizeProbedAt = Date.now()
+
+    let result
+    try {
+      result = await this.getDeviceOptionResult('~SSR')
+    } catch (err) {
+      this.logger.debug('user record layout probe failed, will retry', {
+        retryAfterMs: USER_PACKET_PROBE_INTERVAL_MS,
+        error: err && err.message ? err.message : err
+      })
+      return this.userPacketSize
+    }
+
+    if (!result || !result.attributable) {
+      this.logger.debug('user record layout probe was not answered by the device', {
+        retryAfterMs: USER_PACKET_PROBE_INTERVAL_MS
+      })
+      return this.userPacketSize
+    }
+
+    // The device answered about `~SSR`. Whatever it said is the answer, including
+    // nothing at all — that is how this firmware reports an option it lacks.
+    this.userPacketSizeSettled = true
+    const value = String(result.value === null || result.value === undefined ? '' : result.value).trim()
+    if (value === '1') this.userPacketSize = USER_PACKET_SIZE_72
+    else if (value === '0') this.userPacketSize = USER_PACKET_SIZE_28
+
+    let platform = null
+    if (this.logger.isEnabled && this.logger.isEnabled('debug')) {
+      try { platform = await this.getDeviceOption('~Platform') } catch (err) { /* best effort */ }
+    }
+    this.logger.debug('user record layout probed', {
+      ssr: value, platform, userPacketSize: this.userPacketSize
+    })
+
+    return this.userPacketSize
+  }
+
 	  async setUser(userInfo = {}) {
 	    const explicitPacketSize = userInfo && (
 	      userInfo.packetSize === USER_PACKET_SIZE_28 || userInfo.format === 'legacy'
@@ -657,6 +792,11 @@ class ZKLibTCP {
 	          ? USER_PACKET_SIZE_72
 	          : null
 	    );
+	    // Only when nothing else knows: an explicit size wins, and a size already
+	    // learned from a read wins. So this costs one command once per device.
+	    if (!explicitPacketSize && !this.userPacketSize && !Buffer.isBuffer(userInfo)) {
+	      await this.detectUserPacketSize();
+	    }
 	    const selectedPacketSize = explicitPacketSize || this.userPacketSize || USER_PACKET_SIZE_72;
 	    const useLegacyPacket = selectedPacketSize === USER_PACKET_SIZE_28;
 	    const encoder = useLegacyPacket ? encodeUserInfo28 : encodeUserInfo72;
@@ -709,12 +849,38 @@ class ZKLibTCP {
     return await groupTimezonesHelper.setGroupTimezones(this, info, options);
   }
 
+  /**
+   * Returns the option's value, `null` if the device answered about something else.
+   *
+   * The echoed name used to be discarded, so a reply belonging to another option was
+   * returned as this one's value. `writeMessage` has no realtime filter and no length
+   * check, so a command sharing a socket with a realtime session can be resolved by
+   * the wrong frame — and this is now read on the write path to choose the user
+   * record layout, where a wrong `0`/`1` silently writes unusable records.
+   *
+   * A reply with no `=` at all is still returned as-is: some firmwares answer that
+   * way, and there is nothing to disagree with.
+   */
   async getDeviceOption(name) {
+    const result = await this.getDeviceOptionResult(name);
+    if (result.value === null) {
+      this.logger.debug('options reply answered a different option', {
+        asked: name, answered: result.answered
+      })
+    }
+    return result.value;
+  }
+
+  /**
+   * The same read, but saying whether the device **attributed** its answer to the
+   * option asked for. A caller that acts on the value needs that; `getDeviceOption`
+   * keeps its older, looser contract for everyone else.
+   */
+  async getDeviceOptionResult(name) {
     const reply = await this.executeCmd(COMMANDS.CMD_OPTIONS_RRQ, Buffer.from(`${name}\0`, 'ascii'));
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
     const text = data.toString('ascii').replace(/\0+$/, '');
-    const separator = text.indexOf('=');
-    return separator >= 0 ? text.slice(separator + 1) : text;
+    return readDeviceOptionReply(name, text);
   }
 
   async setDeviceOption(name, value) {

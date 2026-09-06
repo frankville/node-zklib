@@ -1491,6 +1491,48 @@ module.exports.checkNotEventTCP = (data)=> {
   return classifyTCPRealTimeEvent(data).isRealtime
 }
 
+/**
+ * A UDP datagram short enough to be nothing must be recognised **before** anything
+ * reads a field out of it. `decodeUDPHeader` reads bytes 0-7 and no further, so 8 is
+ * the floor — and it cannot be higher, because a payload-less terminal ACK is
+ * exactly 8 bytes.
+ *
+ * This lives here rather than inside `checkNotEventUDP` because that function's three
+ * callers use its result with **opposite polarity** — the data paths skip on true, the
+ * realtime path skips on false — so no single return value for a runt satisfies both.
+ * The check has to be at the call site, and there are three of them.
+ */
+module.exports.isWellFormedUDPFrame = (data) => Buffer.isBuffer(data) && data.length >= 8
+
+/**
+ * Parses a `CMD_OPTIONS_RRQ` reply, returning `null` when it answers a **different**
+ * option than the one asked for.
+ *
+ * The echoed name used to be discarded, so a reply belonging to another option was
+ * returned as this one's value. Names are compared case-insensitively and with NULs
+ * stripped, because a variant spelling of the name asked for is still an answer about
+ * it — the hazard is a different option entirely, which differs by far more than case.
+ * A reply with no `=` is returned as-is for callers that only want a value, but it is
+ * reported as **not attributable**: the one firmware measured answers even an option
+ * it does not implement as `<name>=`, so a reply carrying no assignment at all is a
+ * stolen or truncated frame rather than a trait of the device.
+ */
+module.exports.readDeviceOptionReply = (name, text) => {
+  const separator = text.indexOf('=')
+  // No assignment at all. Compatibility fallback for callers, but **not** an answer:
+  // the one panel measured answers even an option it does not implement as
+  // `<name>=`, so a reply with no `=` here is a stolen or truncated frame.
+  if (separator < 0) return { attributable: false, value: text }
+
+  const canonical = value => String(value).replace(/\0/g, '').trim().toLowerCase()
+  const answered = text.slice(0, separator)
+  if (canonical(answered) !== canonical(name)) {
+    return { attributable: false, value: null, answered: answered.replace(/\0/g, '') }
+  }
+  return { attributable: true, value: text.slice(separator + 1) }
+}
+
+
 module.exports.checkNotEventUDP = (data)=>{
   const commandId = this.decodeUDPHeader(data.subarray(0,8)).commandId
   return commandId === COMMANDS.CMD_REG_EVENT

@@ -124,7 +124,35 @@ class ZKLib {
         
     }
 
-    async createSocket(cbErr, cbClose,toutCb){
+    /**
+     * **In-flight guard.** A dozen callers share one instance and none of them is serialised,
+     * so two that ask at the same moment used to open two sockets: the second caller's check
+     * for an existing socket runs while the first is still connecting. One of them is then
+     * orphaned — connected, unreferenced, never sent CMD_EXIT — which is a leaked session slot
+     * on a terminal that has very few.
+     *
+     * A guard and not a memo. The promise is dropped as soon as it settles, in both directions:
+     * a refused connect is a bad moment, not a permanent verdict, and pinning one would leave
+     * the connection closed for the life of the instance.
+     */
+    async createSocket(cbErr, cbClose, toutCb){
+        if(this.socketCreation){
+            return await this.socketCreation
+        }
+
+        let creation = null
+        creation = this._createSocketOnce(cbErr, cbClose, toutCb).finally(() => {
+            // Only if nobody has started a newer one, so a late settle cannot clear it.
+            if(this.socketCreation === creation){
+                this.socketCreation = null
+            }
+        })
+        this.socketCreation = creation
+
+        return await creation
+    }
+
+    async _createSocketOnce(cbErr, cbClose,toutCb){
             //toutCb is a callback that is called when the keep alive function resulted in 3 timeouts. 
             //This indicates that it has to reconnect again to the device.
             if(this.connectionType === 'tcp'){
@@ -154,13 +182,31 @@ class ZKLib {
 
                 }catch(err){
                     this.logger.error('tcp connect failed', { error: err && err.message ? err.message : err })
+                    // Captured *before* the teardown, and compared after. The close event
+                    // nulls the socket a tick later, leaving a window where a destroyed
+                    // socket still reads as connected — which is exactly what callers use
+                    // to decide they need not reconnect, so the failure path has to clear
+                    // it itself. But disconnect() below can take ~4 s (CMD_EXIT's 2000 ms
+                    // timeout plus closeSocket's 2000 ms fallback), createSocket has no
+                    // in-flight guard, and a dozen unserialised callers share one instance:
+                    // in that window another caller opens and connects a *new* socket.
+                    // Nulling blindly would orphan it — connected, unreferenced, never sent
+                    // CMD_EXIT — which is a leaked session slot on the terminal.
+                    const failedSocket = this.zklibTcp.socket
                     try{
                         await this.zklibTcp.disconnect()
                     }catch(err){}
-        
-                    if(err.code !== ERROR_TYPES.ECONNREFUSED){
-                        return Promise.reject(new ZKError(err, 'TCP CONNECT' , this.ip))
+
+                    if(this.zklibTcp.socket === failedSocket){
+                        this.zklibTcp.socket = null
                     }
+        
+                    // ECONNREFUSED used to be swallowed here: the function returned
+                    // undefined, so callers saw a successful connect with no socket
+                    // and every later command failed as `[TCP] <command>` with an
+                    // empty error. A terminal out of session slots must be reported
+                    // as a connection failure, not as a downstream one.
+                    return Promise.reject(new ZKError(err, 'TCP CONNECT' , this.ip))
 
                 }
                 
@@ -213,7 +259,8 @@ class ZKLib {
     async getUsers(){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getUsers(),
-            ()=> this.zklibUdp.getUsers()
+            ()=> this.zklibUdp.getUsers(),
+            'getUsers'
         )
     }
 
@@ -221,125 +268,143 @@ class ZKLib {
         return await this.functionWrapper(
             ()=> this.zklibTcp.getAttendances(cb),
             ()=> this.zklibUdp.getAttendances(cb),
+            'getAttendances'
         )
     }
 
     async setUser(userInfo){
         return await this.functionWrapper(
             ()=> this.zklibTcp.setUser(userInfo),
-            ()=> this.zklibUdp.setUser(userInfo)
+            ()=> this.zklibUdp.setUser(userInfo),
+            'setUser'
         )
     }
 
     async getTimezone(index){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getTimezone(index),
-            ()=> this.zklibUdp.getTimezone(index)
+            ()=> this.zklibUdp.getTimezone(index),
+            'getTimezone'
         )
     }
 
     async setTimezone(info){
         return await this.functionWrapper(
             ()=> this.zklibTcp.setTimezone(info),
-            ()=> this.zklibUdp.setTimezone(info)
+            ()=> this.zklibUdp.setTimezone(info),
+            'setTimezone'
         )
     }
 
     async getUserTimezones(uid){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getUserTimezones(uid),
-            ()=> this.zklibUdp.getUserTimezones(uid)
+            ()=> this.zklibUdp.getUserTimezones(uid),
+            'getUserTimezones'
         )
     }
 
     async setUserTimezones(info){
         return await this.functionWrapper(
             ()=> this.zklibTcp.setUserTimezones(info),
-            ()=> this.zklibUdp.setUserTimezones(info)
+            ()=> this.zklibUdp.setUserTimezones(info),
+            'setUserTimezones'
         )
     }
 
     async getGroupTimezones(group, options){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getGroupTimezones(group, options),
-            ()=> this.zklibUdp.getGroupTimezones(group, options)
+            ()=> this.zklibUdp.getGroupTimezones(group, options),
+            'getGroupTimezones'
         )
     }
 
     async setGroupTimezones(info, options){
         return await this.functionWrapper(
             ()=> this.zklibTcp.setGroupTimezones(info, options),
-            ()=> this.zklibUdp.setGroupTimezones(info, options)
+            ()=> this.zklibUdp.setGroupTimezones(info, options),
+            'setGroupTimezones'
         )
     }
 
     async getDeviceOption(name){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getDeviceOption(name),
-            ()=> this.zklibUdp.getDeviceOption(name)
+            ()=> this.zklibUdp.getDeviceOption(name),
+            'getDeviceOption'
         )
     }
 
     async setDeviceOption(name, value){
         return await this.functionWrapper(
             ()=> this.zklibTcp.setDeviceOption(name, value),
-            ()=> this.zklibUdp.setDeviceOption(name, value)
+            ()=> this.zklibUdp.setDeviceOption(name, value),
+            'setDeviceOption'
         )
     }
 
     async getUserGroup(uid){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getUserGroup(uid),
-            ()=> this.zklibUdp.getUserGroup(uid)
+            ()=> this.zklibUdp.getUserGroup(uid),
+            'getUserGroup'
         )
     }
 
     async setUserGroup(info){
         return await this.functionWrapper(
             ()=> this.zklibTcp.setUserGroup(info),
-            ()=> this.zklibUdp.setUserGroup(info)
+            ()=> this.zklibUdp.setUserGroup(info),
+            'setUserGroup'
         )
     }
 
     async getUnlockGroup(combination){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getUnlockGroup(combination),
-            ()=> this.zklibUdp.getUnlockGroup(combination)
+            ()=> this.zklibUdp.getUnlockGroup(combination),
+            'getUnlockGroup'
         )
     }
 
     async setUnlockGroup(info, options){
         return await this.functionWrapper(
             ()=> this.zklibTcp.setUnlockGroup(info, options),
-            ()=> this.zklibUdp.setUnlockGroup(info, options)
+            ()=> this.zklibUdp.setUnlockGroup(info, options),
+            'setUnlockGroup'
         )
     }
 
     async getUnlockGroups(){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getUnlockGroups(),
-            ()=> this.zklibUdp.getUnlockGroups()
+            ()=> this.zklibUdp.getUnlockGroups(),
+            'getUnlockGroups'
         )
     }
 
     async setUnlockGroups(info, options){
         return await this.functionWrapper(
             ()=> this.zklibTcp.setUnlockGroups(info, options),
-            ()=> this.zklibUdp.setUnlockGroups(info, options)
+            ()=> this.zklibUdp.setUnlockGroups(info, options),
+            'setUnlockGroups'
         )
     }
 
     async deleteUser(uid){
         return await this.functionWrapper(
             ()=> this.zklibTcp.deleteUser(uid),
-            ()=> this.zklibUdp.deleteUser(uid)
+            ()=> this.zklibUdp.deleteUser(uid),
+            'deleteUser'
         )
     }
 
     async refreshData(){
         return await this.functionWrapper(
             ()=> this.zklibTcp.refreshData(),
-            ()=> this.zklibUdp.refreshData()
+            ()=> this.zklibUdp.refreshData(),
+            'refreshData'
         )
     }
 
@@ -348,7 +413,8 @@ class ZKLib {
 
             await this.functionWrapper(
                 ()=> this.zklibTcp.getRealTimeLogs(cb),
-                ()=> this.zklibUdp.getRealTimeLogs(cb)
+                ()=> this.zklibUdp.getRealTimeLogs(cb),
+                'getRealTimeLogs'
             )
             return true;
 
@@ -364,14 +430,16 @@ class ZKLib {
     async openDoor(){
         return await this. functionWrapper(
             ()=> this.zklibTcp.openDoor(),
-            ()=> this.zklibUdp.openDoor()
+            ()=> this.zklibUdp.openDoor(),
+            'openDoor'
         )
     }
 
     async restartDevice(){
         return await this. functionWrapper(
             ()=> this.zklibTcp.restartDevice(),
-            ()=> this.zklibUdp.restartDevice()
+            ()=> this.zklibUdp.restartDevice(),
+            'restartDevice'
         )
     }
 
@@ -381,7 +449,8 @@ class ZKLib {
 
             await this.functionWrapper(
                 ()=> this.zklibTcp.disconnect(),
-                ()=> this.zklibUdp.disconnect()
+                ()=> this.zklibUdp.disconnect(),
+                'disconnect'
             );
 
         }catch(err){
@@ -393,7 +462,8 @@ class ZKLib {
     async freeData(){
         return await this. functionWrapper(
             ()=> this.zklibTcp.freeData(),
-            ()=> this.zklibUdp.freeData()
+            ()=> this.zklibUdp.freeData(),
+            'freeData'
         )
     }
 
@@ -401,7 +471,8 @@ class ZKLib {
     async disableDevice(){
         return await this. functionWrapper(
             ()=>this.zklibTcp.disableDevice(),
-            ()=>this.zklibUdp.disableDevice()
+            ()=>this.zklibUdp.disableDevice(),
+            'disableDevice'
         )
     }
 
@@ -409,7 +480,8 @@ class ZKLib {
     async enableDevice(){
         return await this.functionWrapper(
             ()=>this.zklibTcp.enableDevice(),
-            ()=> this.zklibUdp.enableDevice()
+            ()=> this.zklibUdp.enableDevice(),
+            'enableDevice'
         )
     }
 
@@ -417,7 +489,8 @@ class ZKLib {
     async getInfo(){
         return await this.functionWrapper(
             ()=> this.zklibTcp.getInfo(),
-            ()=>this.zklibUdp.getInfo()
+            ()=>this.zklibUdp.getInfo(),
+            'getInfo'
         )
     }
 
@@ -425,21 +498,24 @@ class ZKLib {
     async getSocketStatus(){
         return await this.functionWrapper(
             ()=>this.zklibTcp.getSocketStatus(),
-            ()=> this.zklibUdp.getSocketStatus()
+            ()=> this.zklibUdp.getSocketStatus(),
+            'getSocketStatus'
         )
     }
 
     async clearAttendanceLog(){
         return await this.functionWrapper(
             ()=> this.zklibTcp.clearAttendanceLog(),
-            ()=> this.zklibUdp.clearAttendanceLog()
+            ()=> this.zklibUdp.clearAttendanceLog(),
+            'clearAttendanceLog'
         )
     }
 
     async executeCmd(command, data=''){
         return await this.functionWrapper(
             ()=> this.zklibTcp.executeCmd(command, data),
-            ()=> this.zklibUdp.executeCmd(command , data)
+            ()=> this.zklibUdp.executeCmd(command , data),
+            'executeCmd'
         )
     }
 
