@@ -41,8 +41,17 @@ const USER_PACKET_SIZE_72 = 72
  * scales with write volume, so a large site exhausts it far faster than a small one
  * under identical conditions, and nothing about the hazard depends on site size. A
  * spent count also never recovers — the device can be answering correctly while every
- * remaining write goes out at the default. Time caps the extra traffic at about two
- * commands a minute however many credentials there are, and never gives up.
+ * remaining write goes out at the default.
+ *
+ * **The requirement the number has to meet is coverage, not traffic**: it must be
+ * strictly shorter than the caller's reconciliation interval, so every pass begins
+ * with an attempt available. The consumer's apply pass runs at 60 s and is documented
+ * as never going below a minute, so 30 s clears it twofold — and a pass over a
+ * contended device usually runs past 30 s anyway, which buys a second attempt inside
+ * the same pass. Capping the extra traffic at about two commands a minute is the
+ * sanity check on the other side; it is the reason this is not *too small*, not the
+ * reason it is large enough. Raising it on traffic grounds alone would silently cost
+ * a probe per pass.
  */
 const USER_PACKET_PROBE_INTERVAL_MS = 30000
 
@@ -730,7 +739,7 @@ class ZKLibTCP {
      *
      * Remembering any of those pinned the wrong layout for the rest of the session,
      * which on a compact panel is every subsequent write storing an unusable record.
-     * The attempt count is what keeps the retries from becoming a probe per write.
+     * The retry interval is what keeps those retries from becoming a probe per write.
      */
     if (this.userPacketSizeSettled) return this.userPacketSize
     if (this.userPacketSizeProbedAt !== null
