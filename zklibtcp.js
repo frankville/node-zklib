@@ -26,7 +26,7 @@ const { createTCPHeader,
   decodeUnlockGroupInfo,
   decodeUnlockGroupsInfo,
   makeCommKey,
-  parseDeviceOptionReply } = require('./utils')
+  readDeviceOptionReply } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
 const groupTimezonesHelper = require('./helpers/groupTimezones')
@@ -34,6 +34,10 @@ const unlockGroupsHelper = require('./helpers/unlockGroups')
 
 const USER_PACKET_SIZE_28 = 28
 const USER_PACKET_SIZE_72 = 72
+// How often a device that never gives an attributable answer is asked before the
+// question is dropped. Bounded rather than remembered, because every failure shape
+// short of an attributed reply is transient.
+const USER_PACKET_PROBE_ATTEMPTS = 3
 
 
 const isPrintable = (value) => /^[\x20-\x7E]*$/.test(String(value || ''))
@@ -104,8 +108,10 @@ class ZKLibTCP {
     } else {
       this.userPacketSize = null;
     }
-    // Whether the layout was already asked about — see detectUserPacketSize().
-    this.userPacketSizeProbed = false;
+    // Whether the device has answered about the layout, and how many times it has
+    // been asked — see detectUserPacketSize().
+    this.userPacketSizeSettled = false;
+    this.userPacketSizeProbes = 0;
     this.groupTimezoneFormat = normalizeGroupTimezoneFormat(
       options.groupTimezonePacketFormat ?? options.groupTimezoneFormat
     );
@@ -704,50 +710,57 @@ class ZKLibTCP {
    */
   async detectUserPacketSize() {
     if (this.userPacketSize) return this.userPacketSize
-    // The **attempt** is remembered, not just an answer. A firmware that cannot
-    // report the option would otherwise be asked again before every write, and one
-    // extra command per write is the opposite of what this is for.
-    if (this.userPacketSizeProbed) return this.userPacketSize
+    /**
+     * **Permanence is positive, and is never inferred from the shape of a failure.**
+     *
+     * Only a reply the device *attributed* to `~SSR` settles the question. Measured on
+     * a ZEM760: an option it does not implement is still answered `<name>=`, so the one
+     * genuinely permanent failure arrives attributable-and-empty and is remembered
+     * here. Everything else is a broken moment rather than a fact about the firmware —
+     * a reply about another option, a frame carrying no assignment at all, a timeout —
+     * and reply-stealing produces the *missing* reply as readily as the wrong one, so
+     * a throw is no more permanent than a mismatch.
+     *
+     * Remembering any of those pinned the wrong layout for the rest of the session,
+     * which on a compact panel is every subsequent write storing an unusable record.
+     * The attempt count is what keeps the retries from becoming a probe per write.
+     */
+    if (this.userPacketSizeSettled) return this.userPacketSize
+    if (this.userPacketSizeProbes >= USER_PACKET_PROBE_ATTEMPTS) return this.userPacketSize
+    this.userPacketSizeProbes += 1
 
-    let reported
+    let result
     try {
-      reported = await this.getDeviceOption('~SSR')
+      result = await this.getDeviceOptionResult('~SSR')
     } catch (err) {
-      // The device could not run the command. That is a property of the firmware,
-      // so it is not worth asking again before every write.
-      this.userPacketSizeProbed = true
-      this.logger.debug('user record layout could not be probed', {
+      this.logger.debug('user record layout probe failed, will retry', {
+        attempt: this.userPacketSizeProbes,
         error: err && err.message ? err.message : err
       })
       return this.userPacketSize
     }
 
-    // **`null` is not an answer, and not a fact about the device either.** It means
-    // the reply was about a different option — a shifted session, which is transient.
-    // Remembering it would make one stolen frame pin the wrong layout for every write
-    // that follows; asking again lets the next write correct it.
-    if (reported === null) {
-      this.logger.debug('user record layout probe was answered by a different option')
+    if (!result || !result.attributable) {
+      this.logger.debug('user record layout probe was not answered by the device', {
+        attempt: this.userPacketSizeProbes
+      })
       return this.userPacketSize
     }
 
-    this.userPacketSizeProbed = true
+    // The device answered about `~SSR`. Whatever it said is the answer, including
+    // nothing at all — that is how this firmware reports an option it lacks.
+    this.userPacketSizeSettled = true
+    const value = String(result.value === null || result.value === undefined ? '' : result.value).trim()
+    if (value === '1') this.userPacketSize = USER_PACKET_SIZE_72
+    else if (value === '0') this.userPacketSize = USER_PACKET_SIZE_28
 
-    {
-      const value = reported === undefined ? '' : String(reported).trim()
-      if (value === '1') this.userPacketSize = USER_PACKET_SIZE_72
-      else if (value === '0') this.userPacketSize = USER_PACKET_SIZE_28
-      // `~Platform` beside the answer turns one panel into an accumulating record of
-      // which firmwares report what — but it is another command against the terminal,
-      // so it is only asked for when someone is actually reading debug output.
-      let platform = null
-      if (this.logger.isEnabled && this.logger.isEnabled('debug')) {
-        try { platform = await this.getDeviceOption('~Platform') } catch (err) { /* best effort */ }
-      }
-      this.logger.debug('user record layout probed', {
-        ssr: value, platform, userPacketSize: this.userPacketSize
-      })
+    let platform = null
+    if (this.logger.isEnabled && this.logger.isEnabled('debug')) {
+      try { platform = await this.getDeviceOption('~Platform') } catch (err) { /* best effort */ }
     }
+    this.logger.debug('user record layout probed', {
+      ssr: value, platform, userPacketSize: this.userPacketSize
+    })
 
     return this.userPacketSize
   }
@@ -830,18 +843,25 @@ class ZKLibTCP {
    * way, and there is nothing to disagree with.
    */
   async getDeviceOption(name) {
+    const result = await this.getDeviceOptionResult(name);
+    if (result.value === null) {
+      this.logger.debug('options reply answered a different option', {
+        asked: name, answered: result.answered
+      })
+    }
+    return result.value;
+  }
+
+  /**
+   * The same read, but saying whether the device **attributed** its answer to the
+   * option asked for. A caller that acts on the value needs that; `getDeviceOption`
+   * keeps its older, looser contract for everyone else.
+   */
+  async getDeviceOptionResult(name) {
     const reply = await this.executeCmd(COMMANDS.CMD_OPTIONS_RRQ, Buffer.from(`${name}\0`, 'ascii'));
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
     const text = data.toString('ascii').replace(/\0+$/, '');
-    const separator = text.indexOf('=');
-
-    const value = parseDeviceOptionReply(name, text);
-    if (value === null) {
-      this.logger.debug('options reply answered a different option', {
-        asked: name, answered: text.slice(0, separator).replace(/\0/g, '')
-      })
-    }
-    return value;
+    return readDeviceOptionReply(name, text);
   }
 
   async setDeviceOption(name, value) {

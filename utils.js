@@ -1515,14 +1515,21 @@ module.exports.isWellFormedUDPFrame = (data) => Buffer.isBuffer(data) && data.le
  * A reply with no `=` is returned as-is: some firmwares answer an unimplemented option
  * that way, and there is nothing to disagree with.
  */
-module.exports.parseDeviceOptionReply = (name, text) => {
+module.exports.readDeviceOptionReply = (name, text) => {
   const separator = text.indexOf('=')
-  if (separator < 0) return text
+  // No assignment at all. Compatibility fallback for callers, but **not** an answer:
+  // the one panel measured answers even an option it does not implement as
+  // `<name>=`, so a reply with no `=` here is a stolen or truncated frame.
+  if (separator < 0) return { attributable: false, value: text }
 
   const canonical = value => String(value).replace(/\0/g, '').trim().toLowerCase()
-  if (canonical(text.slice(0, separator)) !== canonical(name)) return null
-  return text.slice(separator + 1)
+  const answered = text.slice(0, separator)
+  if (canonical(answered) !== canonical(name)) {
+    return { attributable: false, value: null, answered: answered.replace(/\0/g, '') }
+  }
+  return { attributable: true, value: text.slice(separator + 1) }
 }
+
 
 module.exports.checkNotEventUDP = (data)=>{
   const commandId = this.decodeUDPHeader(data.subarray(0,8)).commandId

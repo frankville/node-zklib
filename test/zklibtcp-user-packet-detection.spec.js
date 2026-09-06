@@ -26,7 +26,7 @@ describe('ZKLibTCP user record layout detection', () => {
 
   it('writes compact records when the device reports ~SSR 0', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    const option = sinon.stub(zk, 'getDeviceOption').resolves('0');
+    const option = sinon.stub(zk, 'getDeviceOptionResult').resolves({ attributable: true, value: '0' });
     const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'X', password: '1234' });
@@ -37,7 +37,7 @@ describe('ZKLibTCP user record layout detection', () => {
 
   it('writes SSR records when the device reports ~SSR 1', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    sinon.stub(zk, 'getDeviceOption').resolves('1');
+    sinon.stub(zk, 'getDeviceOptionResult').resolves({ attributable: true, value: '1' });
     const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'X', password: '1234' });
@@ -47,7 +47,7 @@ describe('ZKLibTCP user record layout detection', () => {
 
   it('keeps the 72-byte default when the device cannot answer', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    sinon.stub(zk, 'getDeviceOption').rejects(new Error('CMD_ACK_ERROR'));
+    sinon.stub(zk, 'getDeviceOptionResult').rejects(new Error('CMD_ACK_ERROR'));
     const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'X', password: '1234' });
@@ -58,7 +58,7 @@ describe('ZKLibTCP user record layout detection', () => {
   it('does not probe when the layout was already learned from a read', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
     zk.userPacketSize = 28;
-    const option = sinon.stub(zk, 'getDeviceOption').resolves('1');
+    const option = sinon.stub(zk, 'getDeviceOptionResult').resolves({ attributable: true, value: '1' });
     const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'X', password: '1234' });
@@ -69,7 +69,7 @@ describe('ZKLibTCP user record layout detection', () => {
 
   it('does not probe when the caller states the layout', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    const option = sinon.stub(zk, 'getDeviceOption').resolves('0');
+    const option = sinon.stub(zk, 'getDeviceOptionResult').resolves({ attributable: true, value: '0' });
     const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'X', password: '1234', packetSize: 72 });
@@ -117,9 +117,9 @@ describe('ZKLibTCP user record layout detection', () => {
 
   // S2: a firmware that cannot answer must be asked once, not once per write. This
   // work exists to stop over-talking to the terminal.
-  it('probes once even when the device never answers', async () => {
+  it('probes once when the device attributes an empty answer to the option', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    const option = sinon.stub(zk, 'getDeviceOption').resolves('');
+    const option = sinon.stub(zk, 'getDeviceOptionResult').resolves({ attributable: true, value: '' });
     sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     for (let i = 0; i < 5; i += 1) {
@@ -127,17 +127,6 @@ describe('ZKLibTCP user record layout detection', () => {
     }
 
     expect(option.callCount, 'an unanswerable probe must not run per write').to.equal(1);
-  });
-
-  it('probes once even when the option command throws', async () => {
-    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    const option = sinon.stub(zk, 'getDeviceOption').rejects(new Error('CMD_ACK_ERROR'));
-    sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
-
-    await zk.setUser({ uid: 1, userId: '1', name: 'X', password: '1234' });
-    await zk.setUser({ uid: 2, userId: '2', name: 'Y', password: '1234' });
-
-    expect(option.callCount).to.equal(1);
   });
 
   /**
@@ -155,9 +144,9 @@ describe('ZKLibTCP user record layout detection', () => {
    */
   it('re-probes after a reply that answered a different option', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    const option = sinon.stub(zk, 'getDeviceOption');
-    option.onFirstCall().resolves(null);
-    option.resolves('0');
+    const option = sinon.stub(zk, 'getDeviceOptionResult');
+    option.onFirstCall().resolves({ attributable: false, value: null });
+    option.resolves({ attributable: true, value: '0' });
     const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'A', password: '1234' });
@@ -185,9 +174,85 @@ describe('ZKLibTCP user record layout detection', () => {
     });
   });
 
+  /**
+   * U1: permanence is now **positive**, not inferred from the shape of a failure.
+   *
+   * Only a reply the device attributed to `~SSR` — one that carried an `=` and echoed
+   * the name — settles the question. Measured on the panel: an option that does not
+   * exist is answered `~NoExistOption=`, so the one genuinely permanent failure
+   * arrives *with* an `=` and is covered. Everything else — a reply about another
+   * option, a frame with no `=` at all, a throw — is a broken moment, not a fact
+   * about the firmware, and reply-stealing produces the missing-reply arm as readily
+   * as the wrong-reply one.
+   */
+  const NO_EQUALS_REPLY = Buffer.concat([Buffer.alloc(8), Buffer.from('garbage\0', 'ascii')]);
+
+  it('re-probes after a reply that carried no option assignment', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const execute = sinon.stub(zk, 'executeCmd');
+    execute.withArgs(COMMANDS.CMD_OPTIONS_RRQ).onFirstCall().resolves(NO_EQUALS_REPLY);
+    execute.withArgs(COMMANDS.CMD_OPTIONS_RRQ).resolves(
+      Buffer.concat([Buffer.alloc(8), Buffer.from('~SSR=0\0', 'ascii')])
+    );
+    execute.resolves(Buffer.alloc(0));
+
+    await zk.setUser({ uid: 1, userId: '1', name: 'A', password: '1234' });
+    await zk.setUser({ uid: 2, userId: '2', name: 'B', password: '1234' });
+
+    const writes = execute.getCalls().filter(call => call.args[0] === COMMANDS.CMD_USER_WRQ);
+    expect(writes[0].args[1].length, 'the first write falls back').to.equal(72);
+    expect(writes[1].args[1].length, 'and the second recovers').to.equal(28);
+  });
+
+  it('re-probes after the option command throws', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const option = sinon.stub(zk, 'getDeviceOptionResult');
+    option.onFirstCall().rejects(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'));
+    option.resolves({ attributable: true, value: '0' });
+    const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+
+    await zk.setUser({ uid: 1, userId: '1', name: 'A', password: '1234' });
+    await zk.setUser({ uid: 2, userId: '2', name: 'B', password: '1234' });
+
+    const writes = execute.getCalls().filter(call => call.args[0] === COMMANDS.CMD_USER_WRQ);
+    expect(writes[1].args[1].length, 'a timeout is a moment, not a firmware fact').to.equal(28);
+  });
+
+  // …but a device that never gives an attributable answer must not be asked forever:
+  // that was the whole point of remembering anything.
+  it('stops re-probing after a bounded number of attempts', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const option = sinon.stub(zk, 'getDeviceOptionResult').rejects(new Error('nope'));
+    sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+
+    for (let i = 0; i < 8; i += 1) {
+      await zk.setUser({ uid: i + 1, userId: String(i + 1), name: 'X', password: '1234' });
+    }
+
+    expect(option.callCount).to.be.greaterThan(1);
+    expect(option.callCount, 'a bound, not a per-write probe').to.be.lessThan(5);
+  });
+
+  // The one genuinely permanent failure: the panel answers an option it does not
+  // implement with `<name>=`, attributable and empty. Asked once.
+  it('asks once when the device attributes an empty answer to the option', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const reply = Buffer.concat([Buffer.alloc(8), Buffer.from('~SSR=\0', 'ascii')]);
+    const execute = sinon.stub(zk, 'executeCmd');
+    execute.withArgs(COMMANDS.CMD_OPTIONS_RRQ).resolves(reply);
+    execute.resolves(Buffer.alloc(0));
+
+    for (let i = 0; i < 5; i += 1) {
+      await zk.setUser({ uid: i + 1, userId: String(i + 1), name: 'X', password: '1234' });
+    }
+
+    const probes = execute.getCalls().filter(call => call.args[0] === COMMANDS.CMD_OPTIONS_RRQ);
+    expect(probes, 'an unimplemented option stays unimplemented').to.have.length(1);
+  });
+
   it('probes once and reuses the answer for later writes', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    const option = sinon.stub(zk, 'getDeviceOption').resolves('0');
+    const option = sinon.stub(zk, 'getDeviceOptionResult').resolves({ attributable: true, value: '0' });
     sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'A', password: '1234' });
