@@ -10,6 +10,7 @@ const {
   exportErrorMessage,
   checkNotEventUDP,
   isWellFormedUDPFrame,
+  parseDeviceOptionReply,
   encodeUserInfo72,
   encodeUserInfo28,
   encodeTimezoneInfo,
@@ -622,12 +623,18 @@ class ZKLibUDP {
     return await groupTimezonesHelper.setGroupTimezones(this, info, options);
   }
 
+  // Returns null when the device answered about a different option — see
+  // parseDeviceOptionReply. Same rule as the TCP path: this transport pair has
+  // produced a TCP-only fix three times on this branch already.
   async getDeviceOption(name) {
     const reply = await this.executeCmd(COMMANDS.CMD_OPTIONS_RRQ, Buffer.from(`${name}\0`, 'ascii'));
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
     const text = data.toString('ascii').replace(/\0+$/, '');
-    const separator = text.indexOf('=');
-    return separator >= 0 ? text.slice(separator + 1) : text;
+    const value = parseDeviceOptionReply(name, text);
+    if (value === null) {
+      this.logger.debug('options reply answered a different option', { asked: name });
+    }
+    return value;
   }
 
   async setDeviceOption(name, value) {

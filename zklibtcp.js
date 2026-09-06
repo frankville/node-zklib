@@ -25,7 +25,8 @@ const { createTCPHeader,
   decodeUserGroupInfo,
   decodeUnlockGroupInfo,
   decodeUnlockGroupsInfo,
-  makeCommKey } = require('./utils')
+  makeCommKey,
+  parseDeviceOptionReply } = require('./utils')
 
 const { log } = require('./helpers/errorLog')
 const groupTimezonesHelper = require('./helpers/groupTimezones')
@@ -707,11 +708,33 @@ class ZKLibTCP {
     // report the option would otherwise be asked again before every write, and one
     // extra command per write is the opposite of what this is for.
     if (this.userPacketSizeProbed) return this.userPacketSize
+
+    let reported
+    try {
+      reported = await this.getDeviceOption('~SSR')
+    } catch (err) {
+      // The device could not run the command. That is a property of the firmware,
+      // so it is not worth asking again before every write.
+      this.userPacketSizeProbed = true
+      this.logger.debug('user record layout could not be probed', {
+        error: err && err.message ? err.message : err
+      })
+      return this.userPacketSize
+    }
+
+    // **`null` is not an answer, and not a fact about the device either.** It means
+    // the reply was about a different option — a shifted session, which is transient.
+    // Remembering it would make one stolen frame pin the wrong layout for every write
+    // that follows; asking again lets the next write correct it.
+    if (reported === null) {
+      this.logger.debug('user record layout probe was answered by a different option')
+      return this.userPacketSize
+    }
+
     this.userPacketSizeProbed = true
 
-    try {
-      const reported = await this.getDeviceOption('~SSR')
-      const value = reported === null || reported === undefined ? '' : String(reported).trim()
+    {
+      const value = reported === undefined ? '' : String(reported).trim()
       if (value === '1') this.userPacketSize = USER_PACKET_SIZE_72
       else if (value === '0') this.userPacketSize = USER_PACKET_SIZE_28
       // `~Platform` beside the answer turns one panel into an accumulating record of
@@ -723,10 +746,6 @@ class ZKLibTCP {
       }
       this.logger.debug('user record layout probed', {
         ssr: value, platform, userPacketSize: this.userPacketSize
-      })
-    } catch (err) {
-      this.logger.debug('user record layout could not be probed', {
-        error: err && err.message ? err.message : err
       })
     }
 
@@ -815,14 +834,14 @@ class ZKLibTCP {
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
     const text = data.toString('ascii').replace(/\0+$/, '');
     const separator = text.indexOf('=');
-    if (separator < 0) return text;
 
-    const answered = text.slice(0, separator).trim();
-    if (answered !== String(name).trim()) {
-      this.logger.debug('options reply answered a different option', { asked: name, answered })
-      return null;
+    const value = parseDeviceOptionReply(name, text);
+    if (value === null) {
+      this.logger.debug('options reply answered a different option', {
+        asked: name, answered: text.slice(0, separator).replace(/\0/g, '')
+      })
     }
-    return text.slice(separator + 1);
+    return value;
   }
 
   async setDeviceOption(name, value) {

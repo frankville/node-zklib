@@ -1504,6 +1504,26 @@ module.exports.checkNotEventTCP = (data)=> {
  */
 module.exports.isWellFormedUDPFrame = (data) => Buffer.isBuffer(data) && data.length >= 8
 
+/**
+ * Parses a `CMD_OPTIONS_RRQ` reply, returning `null` when it answers a **different**
+ * option than the one asked for.
+ *
+ * The echoed name used to be discarded, so a reply belonging to another option was
+ * returned as this one's value. Names are compared case-insensitively and with NULs
+ * stripped, because a variant spelling of the name asked for is still an answer about
+ * it — the hazard is a different option entirely, which differs by far more than case.
+ * A reply with no `=` is returned as-is: some firmwares answer an unimplemented option
+ * that way, and there is nothing to disagree with.
+ */
+module.exports.parseDeviceOptionReply = (name, text) => {
+  const separator = text.indexOf('=')
+  if (separator < 0) return text
+
+  const canonical = value => String(value).replace(/\0/g, '').trim().toLowerCase()
+  if (canonical(text.slice(0, separator)) !== canonical(name)) return null
+  return text.slice(separator + 1)
+}
+
 module.exports.checkNotEventUDP = (data)=>{
   const commandId = this.decodeUDPHeader(data.subarray(0,8)).commandId
   return commandId === COMMANDS.CMD_REG_EVENT

@@ -140,6 +140,51 @@ describe('ZKLibTCP user record layout detection', () => {
     expect(option.callCount).to.equal(1);
   });
 
+  /**
+   * T1: S1 and S2 are each right and their combination was not.
+   *
+   * The echo check correctly refuses a reply about another option — and the
+   * memoization then made that refusal permanent, so the instance fell back to 72
+   * and never asked again. On a panel that needs 28 that is every write for the rest
+   * of the session storing an unusable record. Before the memoization it
+   * self-corrected: the next write re-probed.
+   *
+   * The two misses are different facts. `""` is an unimplemented option, which will
+   * not become implemented — remember it. `null` is a reply about something else,
+   * which is a shifted session and transient — ask again.
+   */
+  it('re-probes after a reply that answered a different option', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const option = sinon.stub(zk, 'getDeviceOption');
+    option.onFirstCall().resolves(null);
+    option.resolves('0');
+    const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+
+    await zk.setUser({ uid: 1, userId: '1', name: 'A', password: '1234' });
+    await zk.setUser({ uid: 2, userId: '2', name: 'B', password: '1234' });
+
+    expect(option.callCount, 'a shifted reply is transient, not an answer').to.equal(2);
+    const writes = execute.getCalls().filter(call => call.args[0] === COMMANDS.CMD_USER_WRQ);
+    expect(writes[0].args[1].length, 'the first write falls back').to.equal(72);
+    expect(writes[1].args[1].length, 'and the second recovers').to.equal(28);
+  });
+
+  // T2: the panel is the authority on its own option names, and a variant spelling of
+  // the name asked for is not an answer about a different option.
+  [
+    ['a lower-case echo', '~ssr=0'],
+    ['a NUL inside the echoed name', '~SSR\u0000=0'],
+    ['padding around the echoed name', ' ~SSR =0']
+  ].forEach(([label, payload]) => {
+    it(`accepts ${label}`, async () => {
+      const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+      const reply = Buffer.concat([Buffer.alloc(8), Buffer.from(payload, 'ascii')]);
+      sinon.stub(zk, 'executeCmd').resolves(reply);
+
+      expect(await zk.getDeviceOption('~SSR')).to.equal('0');
+    });
+  });
+
   it('probes once and reuses the answer for later writes', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
     const option = sinon.stub(zk, 'getDeviceOption').resolves('0');
