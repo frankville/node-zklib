@@ -124,7 +124,35 @@ class ZKLib {
         
     }
 
-    async createSocket(cbErr, cbClose,toutCb){
+    /**
+     * **In-flight guard.** A dozen callers share one instance and none of them is serialised,
+     * so two that ask at the same moment used to open two sockets: the second caller's check
+     * for an existing socket runs while the first is still connecting. One of them is then
+     * orphaned — connected, unreferenced, never sent CMD_EXIT — which is a leaked session slot
+     * on a terminal that has very few.
+     *
+     * A guard and not a memo. The promise is dropped as soon as it settles, in both directions:
+     * a refused connect is a bad moment, not a permanent verdict, and pinning one would leave
+     * the connection closed for the life of the instance.
+     */
+    async createSocket(cbErr, cbClose, toutCb){
+        if(this.socketCreation){
+            return await this.socketCreation
+        }
+
+        let creation = null
+        creation = this._createSocketOnce(cbErr, cbClose, toutCb).finally(() => {
+            // Only if nobody has started a newer one, so a late settle cannot clear it.
+            if(this.socketCreation === creation){
+                this.socketCreation = null
+            }
+        })
+        this.socketCreation = creation
+
+        return await creation
+    }
+
+    async _createSocketOnce(cbErr, cbClose,toutCb){
             //toutCb is a callback that is called when the keep alive function resulted in 3 timeouts. 
             //This indicates that it has to reconnect again to the device.
             if(this.connectionType === 'tcp'){
