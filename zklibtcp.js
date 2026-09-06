@@ -103,6 +103,8 @@ class ZKLibTCP {
     } else {
       this.userPacketSize = null;
     }
+    // Whether the layout was already asked about — see detectUserPacketSize().
+    this.userPacketSizeProbed = false;
     this.groupTimezoneFormat = normalizeGroupTimezoneFormat(
       options.groupTimezonePacketFormat ?? options.groupTimezoneFormat
     );
@@ -701,13 +703,27 @@ class ZKLibTCP {
    */
   async detectUserPacketSize() {
     if (this.userPacketSize) return this.userPacketSize
+    // The **attempt** is remembered, not just an answer. A firmware that cannot
+    // report the option would otherwise be asked again before every write, and one
+    // extra command per write is the opposite of what this is for.
+    if (this.userPacketSizeProbed) return this.userPacketSize
+    this.userPacketSizeProbed = true
 
     try {
       const reported = await this.getDeviceOption('~SSR')
       const value = reported === null || reported === undefined ? '' : String(reported).trim()
       if (value === '1') this.userPacketSize = USER_PACKET_SIZE_72
       else if (value === '0') this.userPacketSize = USER_PACKET_SIZE_28
-      this.logger.debug('user record layout probed', { ssr: value, userPacketSize: this.userPacketSize })
+      // `~Platform` beside the answer turns one panel into an accumulating record of
+      // which firmwares report what — but it is another command against the terminal,
+      // so it is only asked for when someone is actually reading debug output.
+      let platform = null
+      if (this.logger.isEnabled && this.logger.isEnabled('debug')) {
+        try { platform = await this.getDeviceOption('~Platform') } catch (err) { /* best effort */ }
+      }
+      this.logger.debug('user record layout probed', {
+        ssr: value, platform, userPacketSize: this.userPacketSize
+      })
     } catch (err) {
       this.logger.debug('user record layout could not be probed', {
         error: err && err.message ? err.message : err
@@ -782,12 +798,31 @@ class ZKLibTCP {
     return await groupTimezonesHelper.setGroupTimezones(this, info, options);
   }
 
+  /**
+   * Returns the option's value, `null` if the device answered about something else.
+   *
+   * The echoed name used to be discarded, so a reply belonging to another option was
+   * returned as this one's value. `writeMessage` has no realtime filter and no length
+   * check, so a command sharing a socket with a realtime session can be resolved by
+   * the wrong frame — and this is now read on the write path to choose the user
+   * record layout, where a wrong `0`/`1` silently writes unusable records.
+   *
+   * A reply with no `=` at all is still returned as-is: some firmwares answer that
+   * way, and there is nothing to disagree with.
+   */
   async getDeviceOption(name) {
     const reply = await this.executeCmd(COMMANDS.CMD_OPTIONS_RRQ, Buffer.from(`${name}\0`, 'ascii'));
     const data = reply && reply.length > 8 ? reply.subarray(8) : Buffer.alloc(0);
     const text = data.toString('ascii').replace(/\0+$/, '');
     const separator = text.indexOf('=');
-    return separator >= 0 ? text.slice(separator + 1) : text;
+    if (separator < 0) return text;
+
+    const answered = text.slice(0, separator).trim();
+    if (answered !== String(name).trim()) {
+      this.logger.debug('options reply answered a different option', { asked: name, answered })
+      return null;
+    }
+    return text.slice(separator + 1);
   }
 
   async setDeviceOption(name, value) {

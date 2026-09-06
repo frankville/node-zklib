@@ -78,6 +78,68 @@ describe('ZKLibTCP user record layout detection', () => {
     expect(writtenPayload(execute).length).to.equal(72);
   });
 
+  // S1: the reply is not checked against the option that was asked for. `~SSR`'s two
+  // nearest neighbours in the same namespace, `~UserExtFmt` and `~ExtendFmt`, both
+  // read "1" on this panel — the value that selects the layout that corrupts the
+  // record. A shifted reply is not an improbable byte collision here.
+  it('ignores an options reply that answers a different option', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const reply = Buffer.concat([Buffer.alloc(8), Buffer.from('~ExtendFmt=1\0', 'ascii')]);
+    sinon.stub(zk, 'executeCmd').callsFake(async (command) => (
+      command === COMMANDS.CMD_OPTIONS_RRQ ? reply : Buffer.alloc(0)
+    ));
+
+    expect(await zk.getDeviceOption('~SSR')).to.equal(null);
+  });
+
+  it('keeps the default when the layout probe is answered by a different option', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    // `0` and not `1`: a stolen `1` selects 72, which is also the default, so the
+    // assertion would hold for the wrong reason and measure nothing.
+    const reply = Buffer.concat([Buffer.alloc(8), Buffer.from('~UserExtFmt=0\0', 'ascii')]);
+    const execute = sinon.stub(zk, 'executeCmd').callsFake(async (command) => (
+      command === COMMANDS.CMD_OPTIONS_RRQ ? reply : Buffer.alloc(0)
+    ));
+
+    await zk.setUser({ uid: 1, userId: '1', name: 'X', password: '1234' });
+
+    const write = execute.getCalls().find(call => call.args[0] === COMMANDS.CMD_USER_WRQ);
+    expect(write.args[1].length, 'a stolen reply must not choose the layout').to.equal(72);
+  });
+
+  it('reads an option that answers itself', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const reply = Buffer.concat([Buffer.alloc(8), Buffer.from('~SSR=0\0', 'ascii')]);
+    sinon.stub(zk, 'executeCmd').resolves(reply);
+
+    expect(await zk.getDeviceOption('~SSR')).to.equal('0');
+  });
+
+  // S2: a firmware that cannot answer must be asked once, not once per write. This
+  // work exists to stop over-talking to the terminal.
+  it('probes once even when the device never answers', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const option = sinon.stub(zk, 'getDeviceOption').resolves('');
+    sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+
+    for (let i = 0; i < 5; i += 1) {
+      await zk.setUser({ uid: i + 1, userId: String(i + 1), name: 'X', password: '1234' });
+    }
+
+    expect(option.callCount, 'an unanswerable probe must not run per write').to.equal(1);
+  });
+
+  it('probes once even when the option command throws', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const option = sinon.stub(zk, 'getDeviceOption').rejects(new Error('CMD_ACK_ERROR'));
+    sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+
+    await zk.setUser({ uid: 1, userId: '1', name: 'X', password: '1234' });
+    await zk.setUser({ uid: 2, userId: '2', name: 'Y', password: '1234' });
+
+    expect(option.callCount).to.equal(1);
+  });
+
   it('probes once and reuses the answer for later writes', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
     const option = sinon.stub(zk, 'getDeviceOption').resolves('0');
