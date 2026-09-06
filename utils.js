@@ -1512,8 +1512,10 @@ module.exports.isWellFormedUDPFrame = (data) => Buffer.isBuffer(data) && data.le
  * returned as this one's value. Names are compared case-insensitively and with NULs
  * stripped, because a variant spelling of the name asked for is still an answer about
  * it — the hazard is a different option entirely, which differs by far more than case.
- * A reply with no `=` is returned as-is: some firmwares answer an unimplemented option
- * that way, and there is nothing to disagree with.
+ * A reply with no `=` is returned as-is for callers that only want a value, but it is
+ * reported as **not attributable**: the one firmware measured answers even an option
+ * it does not implement as `<name>=`, so a reply carrying no assignment at all is a
+ * stolen or truncated frame rather than a trait of the device.
  */
 module.exports.readDeviceOptionReply = (name, text) => {
   const separator = text.indexOf('=')

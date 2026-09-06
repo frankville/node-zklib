@@ -150,6 +150,7 @@ describe('ZKLibTCP user record layout detection', () => {
     const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'A', password: '1234' });
+    zk.userPacketSizeProbedAt -= 60000;
     await zk.setUser({ uid: 2, userId: '2', name: 'B', password: '1234' });
 
     expect(option.callCount, 'a shifted reply is transient, not an answer').to.equal(2);
@@ -197,11 +198,12 @@ describe('ZKLibTCP user record layout detection', () => {
     execute.resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'A', password: '1234' });
+    zk.userPacketSizeProbedAt -= 60000;
     await zk.setUser({ uid: 2, userId: '2', name: 'B', password: '1234' });
 
     const writes = execute.getCalls().filter(call => call.args[0] === COMMANDS.CMD_USER_WRQ);
     expect(writes[0].args[1].length, 'the first write falls back').to.equal(72);
-    expect(writes[1].args[1].length, 'and the second recovers').to.equal(28);
+    expect(writes[1].args[1].length, 'and a later one recovers').to.equal(28);
   });
 
   it('re-probes after the option command throws', async () => {
@@ -212,25 +214,71 @@ describe('ZKLibTCP user record layout detection', () => {
     const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     await zk.setUser({ uid: 1, userId: '1', name: 'A', password: '1234' });
+    zk.userPacketSizeProbedAt -= 60000;
     await zk.setUser({ uid: 2, userId: '2', name: 'B', password: '1234' });
 
     const writes = execute.getCalls().filter(call => call.args[0] === COMMANDS.CMD_USER_WRQ);
     expect(writes[1].args[1].length, 'a timeout is a moment, not a firmware fact').to.equal(28);
   });
 
-  // …but a device that never gives an attributable answer must not be asked forever:
-  // that was the whole point of remembering anything.
-  it('stops re-probing after a bounded number of attempts', async () => {
+  /**
+   * …but the retries are bounded **in time, not in attempts**.
+   *
+   * A count is the wrong unit: it scales with write volume, so a 90-credential site
+   * burns the budget thirty times faster than a three-credential one under identical
+   * conditions, and nothing about the hazard depends on site size. Worse, the count
+   * can only ever be spent on failures — an attributable reply settles — so a few
+   * unlucky moments early in a pass exhaust it and every remaining write goes out at
+   * the default, while the device answers correctly the whole time.
+   */
+  it('does not probe more than once inside the retry interval', async () => {
     const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
-    const option = sinon.stub(zk, 'getDeviceOptionResult').rejects(new Error('nope'));
+    const option = sinon.stub(zk, 'getDeviceOptionResult').rejects(new Error('shifted'));
     sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
 
     for (let i = 0; i < 8; i += 1) {
       await zk.setUser({ uid: i + 1, userId: String(i + 1), name: 'X', password: '1234' });
     }
 
-    expect(option.callCount).to.be.greaterThan(1);
-    expect(option.callCount, 'a bound, not a per-write probe').to.be.lessThan(5);
+    expect(option.callCount, 'a broken session must not cost a probe per write').to.equal(1);
+  });
+
+  it('probes again once the retry interval has passed, and never gives up', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const option = sinon.stub(zk, 'getDeviceOptionResult');
+    option.onFirstCall().rejects(new Error('shifted'));
+    option.resolves({ attributable: true, value: '0' });
+    const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+
+    await zk.setUser({ uid: 1, userId: '1', name: 'A', password: '1234' });
+    // Wind the last attempt back past the interval rather than waiting it out.
+    zk.userPacketSizeProbedAt -= 60000;
+    await zk.setUser({ uid: 2, userId: '2', name: 'B', password: '1234' });
+
+    const writes = execute.getCalls().filter(call => call.args[0] === COMMANDS.CMD_USER_WRQ);
+    expect(writes[0].args[1].length, 'the contended write falls back').to.equal(72);
+    expect(writes[1].args[1].length, 'and the layout is still learnable later').to.equal(28);
+  });
+
+  it('recovers after many contended writes, not just the first few', async () => {
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 1000);
+    const option = sinon.stub(zk, 'getDeviceOptionResult');
+    option.rejects(new Error('shifted'));
+    const execute = sinon.stub(zk, 'executeCmd').resolves(Buffer.alloc(0));
+
+    // Twenty writes, each its own contended moment. A count-based bound would have
+    // been spent long before this and pinned the default for the rest of the pass.
+    for (let i = 0; i < 20; i += 1) {
+      zk.userPacketSizeProbedAt -= 60000;
+      await zk.setUser({ uid: i + 1, userId: String(i + 1), name: 'X', password: '1234' });
+    }
+    option.resolves({ attributable: true, value: '0' });
+    zk.userPacketSizeProbedAt -= 60000;
+    await zk.setUser({ uid: 99, userId: '99', name: 'Z', password: '1234' });
+
+    const writes = execute.getCalls().filter(call => call.args[0] === COMMANDS.CMD_USER_WRQ);
+    expect(writes[writes.length - 1].args[1].length,
+      'the budget is time, so it is never exhausted by volume').to.equal(28);
   });
 
   // The one genuinely permanent failure: the panel answers an option it does not

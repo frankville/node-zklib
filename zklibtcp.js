@@ -34,10 +34,17 @@ const unlockGroupsHelper = require('./helpers/unlockGroups')
 
 const USER_PACKET_SIZE_28 = 28
 const USER_PACKET_SIZE_72 = 72
-// How often a device that never gives an attributable answer is asked before the
-// question is dropped. Bounded rather than remembered, because every failure shape
-// short of an attributed reply is transient.
-const USER_PACKET_PROBE_ATTEMPTS = 3
+/**
+ * How long to wait before asking again, while the layout is unsettled.
+ *
+ * Bounded in **time** rather than in attempts, because a count is the wrong unit: it
+ * scales with write volume, so a large site exhausts it far faster than a small one
+ * under identical conditions, and nothing about the hazard depends on site size. A
+ * spent count also never recovers — the device can be answering correctly while every
+ * remaining write goes out at the default. Time caps the extra traffic at about two
+ * commands a minute however many credentials there are, and never gives up.
+ */
+const USER_PACKET_PROBE_INTERVAL_MS = 30000
 
 
 const isPrintable = (value) => /^[\x20-\x7E]*$/.test(String(value || ''))
@@ -108,10 +115,10 @@ class ZKLibTCP {
     } else {
       this.userPacketSize = null;
     }
-    // Whether the device has answered about the layout, and how many times it has
-    // been asked — see detectUserPacketSize().
+    // Whether the device has answered about the layout, and when it was last asked
+    // — see detectUserPacketSize().
     this.userPacketSizeSettled = false;
-    this.userPacketSizeProbes = 0;
+    this.userPacketSizeProbedAt = null;
     this.groupTimezoneFormat = normalizeGroupTimezoneFormat(
       options.groupTimezonePacketFormat ?? options.groupTimezoneFormat
     );
@@ -726,15 +733,18 @@ class ZKLibTCP {
      * The attempt count is what keeps the retries from becoming a probe per write.
      */
     if (this.userPacketSizeSettled) return this.userPacketSize
-    if (this.userPacketSizeProbes >= USER_PACKET_PROBE_ATTEMPTS) return this.userPacketSize
-    this.userPacketSizeProbes += 1
+    if (this.userPacketSizeProbedAt !== null
+      && Date.now() - this.userPacketSizeProbedAt < USER_PACKET_PROBE_INTERVAL_MS) {
+      return this.userPacketSize
+    }
+    this.userPacketSizeProbedAt = Date.now()
 
     let result
     try {
       result = await this.getDeviceOptionResult('~SSR')
     } catch (err) {
       this.logger.debug('user record layout probe failed, will retry', {
-        attempt: this.userPacketSizeProbes,
+        retryAfterMs: USER_PACKET_PROBE_INTERVAL_MS,
         error: err && err.message ? err.message : err
       })
       return this.userPacketSize
@@ -742,7 +752,7 @@ class ZKLibTCP {
 
     if (!result || !result.attributable) {
       this.logger.debug('user record layout probe was not answered by the device', {
-        attempt: this.userPacketSizeProbes
+        retryAfterMs: USER_PACKET_PROBE_INTERVAL_MS
       })
       return this.userPacketSize
     }
