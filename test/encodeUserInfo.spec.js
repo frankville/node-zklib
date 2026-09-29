@@ -131,6 +131,43 @@ describe('encodeUserInfo72', () => {
   it('throws when uid is missing', () => {
     expect(() => encodeUserInfo72({})).to.throw(/uid is required/);
   });
+
+  it('rejects a uid past the 16-bit slot space instead of clamping', () => {
+    expect(() => encodeUserInfo72({ uid: 300000 })).to.throw(/between 1 and 65534/);
+    expect(() => encodeUserInfo72({ uid: 65535 })).to.throw(/between 1 and 65534/);
+    expect(() => encodeUserInfo72({ uid: 0 })).to.throw(/between 1 and 65534/);
+    expect(() => encodeUserInfo72({ uid: -1 })).to.throw(/between 1 and 65534/);
+    expect(() => encodeUserInfo72({ uid: 1.5 })).to.throw(/between 1 and 65534/);
+    expect(() => encodeUserInfo72({ uid: 'abc' })).to.throw(/between 1 and 65534/);
+  });
+
+  it('accepts the uid bounds and numeric strings', () => {
+    expect(encodeUserInfo72({ uid: 1 }).readUInt16LE(0)).to.equal(1);
+    expect(encodeUserInfo72({ uid: 65534 }).readUInt16LE(0)).to.equal(65534);
+    expect(encodeUserInfo72({ uid: '42' }).readUInt16LE(0)).to.equal(42);
+  });
+
+  it('rejects a userId longer than the 9-byte ASCII field instead of truncating', () => {
+    expect(() => encodeUserInfo72({ uid: 1, userId: '1234567890' }))
+      .to.throw(/at most 9 characters/);
+    expect(() => encodeUserInfo72({ uid: 1, userId: 1000000001 }))
+      .to.throw(/at most 9 characters/);
+  });
+
+  it('rejects a non-ASCII userId rather than silently stripping characters', () => {
+    expect(() => encodeUserInfo72({ uid: 1, userId: 'USR-ñ' })).to.throw(/must be ASCII/);
+  });
+
+  it('accepts a full-width userId and round-trips it', () => {
+    const buffer = encodeUserInfo72({ uid: 1, userId: '123456789' });
+
+    expect(buffer.toString('ascii', 48, 57)).to.equal('123456789');
+    expect(decodeUserData72(buffer).userId).to.equal('123456789');
+  });
+
+  it('treats a missing userId as an empty field', () => {
+    expect(decodeUserData72(encodeUserInfo72({ uid: 1 })).userId).to.equal('');
+  });
 });
 
 describe('encodeUserInfo28', () => {
@@ -228,5 +265,33 @@ describe('encodeUserInfo28', () => {
 
   it('throws when uid is missing', () => {
     expect(() => encodeUserInfo28({})).to.throw(/uid is required/);
+  });
+
+  it('rejects a uid past the 16-bit slot space instead of clamping', () => {
+    expect(() => encodeUserInfo28({ uid: 300000 })).to.throw(/between 1 and 65534/);
+    expect(() => encodeUserInfo28({ uid: 65535 })).to.throw(/between 1 and 65534/);
+    expect(() => encodeUserInfo28({ uid: 0 })).to.throw(/between 1 and 65534/);
+  });
+
+  it('accepts the uid bounds', () => {
+    expect(encodeUserInfo28({ uid: 1 }).readUInt16LE(0)).to.equal(1);
+    expect(encodeUserInfo28({ uid: 65534 }).readUInt16LE(0)).to.equal(65534);
+  });
+
+  it('rejects a numeric userId past the u32 field instead of clamping', () => {
+    expect(() => encodeUserInfo28({ uid: 1, userId: 5000000000 }))
+      .to.throw(/between 0 and 4294967295/);
+    expect(() => encodeUserInfo28({ uid: 1, userId: -1 }))
+      .to.throw(/between 0 and 4294967295/);
+    expect(() => encodeUserInfo28({ uid: 1, userId: 1.5 }))
+      .to.throw(/between 0 and 4294967295/);
+  });
+
+  it('accepts the numeric userId bounds', () => {
+    expect(encodeUserInfo28({ uid: 1, userId: 0 }).readUInt32LE(24)).to.equal(0);
+    expect(encodeUserInfo28({ uid: 1, userId: 4294967295 }).readUInt32LE(24))
+      .to.equal(4294967295);
+    expect(encodeUserInfo28({ uid: 1, userId: '999999999' }).readUInt32LE(24))
+      .to.equal(999999999);
   });
 });

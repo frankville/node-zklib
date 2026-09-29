@@ -316,15 +316,93 @@ const toUInt32 = (value, fallback = 0) => {
     return num >>> 0;
 };
 
+// The uid is the device's user-table slot index and travels as a 16-bit LE
+// field, so 1..65534 is the whole addressable space (0 and 65535 are reserved
+// sentinels). toUInt16 clamps instead of throwing, which would silently write a
+// user to slot 65535 when the caller meant something like 300000 — validate up
+// front so the mistake surfaces at the call site. Business identifiers larger
+// than this belong in `userId`, not `uid`.
+const UID_MIN = 1;
+const UID_MAX = 0xFFFE;
+
+const assertUid = (value, context) => {
+    if (value === undefined || value === null) {
+        throw new Error(`${context}: uid is required`);
+    }
+
+    const num = Number(value);
+    if (!Number.isInteger(num) || num < UID_MIN || num > UID_MAX) {
+        throw new Error(
+            `${context}: uid must be an integer between ${UID_MIN} and ${UID_MAX} ` +
+            `(got ${value}) — the device addresses users with a 16-bit slot index; ` +
+            'use userId for larger identifiers'
+        );
+    }
+
+    return num;
+};
+
+// userId is the device-facing PIN and is width-limited per transport: 9 ASCII
+// bytes on SSR/72B, a u32 on compact/28B. Both write paths lose data quietly —
+// writeAsciiField truncates and toUInt32 clamps — so two accounts whose ids
+// differ only past the limit would collapse onto one device record. Validate
+// instead, since a silent collision is far more expensive to find later.
+const USER_ID_ASCII_MAX = 9;
+const USER_ID_NUMERIC_MAX = 0xFFFFFFFF;
+
+const assertUserIdAscii = (value, context) => {
+    if (value === undefined || value === null || value === '') {
+        return '';
+    }
+
+    const str = value.toString();
+    if (str !== sanitizeAscii(str)) {
+        throw new Error(
+            `${context}: userId must be ASCII (got ${JSON.stringify(str)}) — ` +
+            'non-ASCII characters would be stripped, changing the id written to the device'
+        );
+    }
+    if (str.length > USER_ID_ASCII_MAX) {
+        throw new Error(
+            `${context}: userId must be at most ${USER_ID_ASCII_MAX} characters ` +
+            `(got ${JSON.stringify(str)}, ${str.length}) — the SSR user record stores ` +
+            'it in a 9-byte ASCII field and longer values would be truncated'
+        );
+    }
+
+    return str;
+};
+
+// Note the non-numeric fallback to uid is deliberate and stays: it is what lets
+// a user read from an SSR device (ASCII userId) be written back to a compact
+// one. Only values that are numeric but unrepresentable are rejected.
+const assertUserIdNumeric = (value, context) => {
+    if (value === undefined || value === null || value === '') {
+        return undefined;
+    }
+
+    const num = Number(value);
+    if (Number.isNaN(num)) {
+        return undefined;
+    }
+    if (!Number.isInteger(num) || num < 0 || num > USER_ID_NUMERIC_MAX) {
+        throw new Error(
+            `${context}: numeric userId must be an integer between 0 and ` +
+            `${USER_ID_NUMERIC_MAX} (got ${value}) — the compact user record stores ` +
+            'it as a u32 and out-of-range values would be clamped'
+        );
+    }
+
+    return num;
+};
+
 module.exports.encodeUserInfo72 = (options = {}) => {
     const payload = Buffer.alloc(72);
     payload.fill(0);
 
-    if (options.uid === undefined || options.uid === null) {
-        throw new Error('encodeUserInfo72: uid is required');
-    }
+    const uid = assertUid(options.uid, 'encodeUserInfo72');
 
-    payload.writeUInt16LE(toUInt16(options.uid), 0);
+    payload.writeUInt16LE(uid, 0);
 
     payload.writeUInt8(resolvePermissionToken(options), 2);
 
@@ -352,7 +430,12 @@ module.exports.encodeUserInfo72 = (options = {}) => {
     payload.writeUInt16LE(toUInt16(timezones[1] ?? 0), 44);
     payload.writeUInt16LE(toUInt16(timezones[2] ?? 0), 46);
 
-    writeAsciiField(payload, options.userId ?? options.userid ?? '', 48, 9);
+    writeAsciiField(
+        payload,
+        assertUserIdAscii(options.userId ?? options.userid, 'encodeUserInfo72'),
+        48,
+        USER_ID_ASCII_MAX
+    );
 
     return payload;
 };
@@ -361,11 +444,9 @@ module.exports.encodeUserInfo28 = (options = {}) => {
     const payload = Buffer.alloc(28);
     payload.fill(0);
 
-    if (options.uid === undefined || options.uid === null) {
-        throw new Error('encodeUserInfo28: uid is required');
-    }
+    const uid = assertUid(options.uid, 'encodeUserInfo28');
 
-    payload.writeUInt16LE(toUInt16(options.uid), 0);
+    payload.writeUInt16LE(uid, 0);
 
     payload.writeUInt8(resolvePermissionToken(options), 2);
 
@@ -377,10 +458,10 @@ module.exports.encodeUserInfo28 = (options = {}) => {
         compactData.copy(payload, 16, 0, Math.min(compactData.length, 8));
     }
 
-    const userIdValue = toUInt32(
-        options.userId ?? options.userid ?? options.uid,
-        toUInt32(options.uid)
-    );
+    const userIdValue = assertUserIdNumeric(
+        options.userId ?? options.userid,
+        'encodeUserInfo28'
+    ) ?? uid;
     payload.writeUInt32LE(userIdValue, 24);
 
     return payload;
