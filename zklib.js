@@ -392,6 +392,22 @@ class ZKLib {
         )
     }
 
+    async getTime(){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.getTime(),
+            ()=> this.zklibUdp.getTime(),
+            'getTime'
+        )
+    }
+
+    async setTime(date, options){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.setTime(date, options),
+            ()=> this.zklibUdp.setTime(date, options),
+            'setTime'
+        )
+    }
+
     async deleteUser(uid){
         return await this.functionWrapper(
             ()=> this.zklibTcp.deleteUser(uid),

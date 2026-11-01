@@ -31,6 +31,7 @@ const { createTCPHeader,
 const { log } = require('./helpers/errorLog')
 const groupTimezonesHelper = require('./helpers/groupTimezones')
 const unlockGroupsHelper = require('./helpers/unlockGroups')
+const deviceTimeHelper = require('./helpers/deviceTime')
 
 const USER_PACKET_SIZE_28 = 28
 const USER_PACKET_SIZE_72 = 72
@@ -935,6 +936,14 @@ class ZKLibTCP {
 	  async setUnlockGroups(info = {}, options = {}) {
 	    return await unlockGroupsHelper.setUnlockGroups(this, info, options);
 	  }
+
+  async getTime() {
+    return await deviceTimeHelper.readTime(this);
+  }
+
+  async setTime(date, options = {}) {
+    return await deviceTimeHelper.writeTime(this, date, options);
+  }
 
   async deleteUser(uid) {
     if (Buffer.isBuffer(uid)) {

@@ -33,6 +33,7 @@ const { MAX_CHUNK, REQUEST_DATA, COMMANDS, TERMINAL_ACKS } = require('./constant
 const { log } = require('./helpers/errorLog')
 const groupTimezonesHelper = require('./helpers/groupTimezones')
 const unlockGroupsHelper = require('./helpers/unlockGroups')
+const deviceTimeHelper = require('./helpers/deviceTime')
 
 
 class ZKLibUDP {
@@ -691,6 +692,14 @@ class ZKLibUDP {
 	  async setUnlockGroups(info = {}, options = {}) {
 	    return await unlockGroupsHelper.setUnlockGroups(this, info, options);
 	  }
+
+  async getTime() {
+    return await deviceTimeHelper.readTime(this);
+  }
+
+  async setTime(date, options = {}) {
+    return await deviceTimeHelper.writeTime(this, date, options);
+  }
 
   async deleteUser(uid) {
     if (Buffer.isBuffer(uid)) {
