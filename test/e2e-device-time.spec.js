@@ -27,7 +27,11 @@ maybeDescribe('ZKLib device time (e2e)', function () {
 
   before(async () => {
     zk = new ZKLib(ip, port, timeoutMs, connectionType, connectionType === 'udp' ? inport : undefined);
-    if (process.env.ZKLIB_E2E_LOG_LEVEL) zk.setLogLevel(process.env.ZKLIB_E2E_LOG_LEVEL);
+    // A level alone prints nothing: the logger has no sink until one is set.
+    if (process.env.ZKLIB_E2E_LOG_LEVEL) {
+      zk.setLogger(console);
+      zk.setLogLevel(process.env.ZKLIB_E2E_LOG_LEVEL);
+    }
     await zk.createSocket();
   });
 
