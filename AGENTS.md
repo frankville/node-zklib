@@ -30,7 +30,7 @@ Protocol Reference
 
 Transport Model
 - Both UDP and TCP are supported. The facade picks implementation via `zk.connectionType` (`'udp'` default, `'tcp'` optional).
-- Most public methods are identical across transports: `getUsers`, `setUser`, `deleteUser`, `getTimezone`, `setTimezone`, `getUserTimezones`, `setUserTimezones`, `getGroupTimezones`, `setGroupTimezones`, `getUserGroup`, `setUserGroup`, `getUnlockGroup`, `setUnlockGroup`, `getUnlockGroups`, `setUnlockGroups`, `getDeviceOption`, `setDeviceOption`, `openDoor`, `refreshData`, `enableDevice`, `disableDevice`.
+- Most public methods are identical across transports: `getUsers`, `setUser`, `deleteUser`, `getTimezone`, `setTimezone`, `getUserTimezones`, `setUserTimezones`, `getGroupTimezones`, `setGroupTimezones`, `getUserGroup`, `setUserGroup`, `getUnlockGroup`, `setUnlockGroup`, `getUnlockGroups`, `setUnlockGroups`, `getDeviceOption`, `setDeviceOption`, `getTime`, `setTime`, `openDoor`, `refreshData`, `enableDevice`, `disableDevice`.
 - `getDeviceOption(name)` / `setDeviceOption(name, value)` wrap `CMD_OPTIONS_RRQ`/`CMD_OPTIONS_WRQ` (ASCII `Name\0` request, `Name=value\0` write) — used for firmware capability probing (`~Platform`, `~SerialNumber`, …) and for per-group verify style on compact panels (`GVS<group>`).
 
 User Encoding
@@ -127,6 +127,15 @@ Public API (Facade)
   - `await zk.createSocket(onError, onClose, onTimeout);`
   - Calls: `zk.getUsers()`, `zk.setUser()`, `zk.deleteUser()`, `zk.getTimezone(i)`, `zk.setTimezone(info)`, `zk.getUserTimezones(uid)`, `zk.setUserTimezones(info)`, `zk.getGroupTimezones(g)`, `zk.setGroupTimezones(info)`, `zk.getUserGroup(uid)`, `zk.setUserGroup(info)`, `zk.getUnlockGroups()`, `zk.setUnlockGroup(info)`, `zk.setUnlockGroups(info)`, `zk.openDoor()`.
   - For writes, callers often follow with `zk.refreshData()` to ensure persistence.
+
+Device Clock
+- `getTime()` / `setTime(date, { toleranceMs })` wrap `CMD_GET_TIME` (201) / `CMD_SET_TIME` (202); shared by both transports in `helpers/deviceTime.js`.
+- The payload is one u32 in the packed form stored attendance records use: `((((yy*12 + month0)*31 + day-1)*24 + hour)*60 + minute)*60 + second`, years 2000–2099. `encodeTime` / `decodeTime` in `utils.js`.
+- **The clock has no zone.** Both directions use a `Date`'s local fields, as the realtime decoders do, so the host's timezone gives the value its meaning. Every event time is this clock read in the host's zone; a device clock that is off moves every event time with it.
+- `getTime` rejects (`ERR_GET_TIME_REJECTED`) anything but `ACK_OK` with exactly 4 payload bytes, so another command's reply is never decoded as a clock.
+- `setTime` requires `ACK_OK` (`ERR_SET_TIME_REJECTED`) and then reads the clock back; a read-back more than `toleranceMs` (default 5000) from the written value plus elapsed time, either way, rejects with `ERR_SET_TIME_NOT_PERSISTED`. The comparison is on wall fields, not instants: in the repeated autumn DST hour a decoded `Date` resolves to the first offset, so an instant comparison reads a correct clock an hour off.
+- Opt-in only: the library never calls either method on its own. Connecting, the realtime listener and every other command leave the device clock as it is.
+- Confirmed on one terminal: the reply layout above, read over TCP and UDP, and a write over TCP that persists without `disableDevice` / `refreshData` around it. A UDP write is untested; one the device ignored would still fail the read-back. `test/e2e-device-time.spec.js` reads with `ZKLIB_E2E_IP` set and writes only with `ZKLIB_E2E_TIME_WRITE=1` (moves the clock 10 minutes, verifies, restores host time).
 
 Integration Patterns
 - Typical flow in apps:

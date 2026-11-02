@@ -14,9 +14,26 @@ const parseTimeToDate = (time)=>{
     const month = time % 12;
     time = (time - month) / 12;
     const year = time + 2000;
-    
+
     return new Date(year, month, day, hour, minute, second);
 }
+
+// The inverse of parseTimeToDate, read from the Date's local fields, as that one builds them.
+// Two-digit years only: the u32 would hold years past 2099, but firmware is not known to.
+const encodeTime = (date)=>{
+    if (!(date instanceof Date) || !Number.isFinite(date.getTime())) {
+        throw new TypeError('encodeTime: a valid Date is required');
+    }
+    const year = date.getFullYear();
+    if (year < 2000 || year > 2099) {
+        throw new RangeError(`encodeTime: year ${year} is outside 2000-2099`);
+    }
+    const days = ((year - 2000) * 12 + date.getMonth()) * 31 + (date.getDate() - 1);
+    return ((days * 24 + date.getHours()) * 60 + date.getMinutes()) * 60 + date.getSeconds();
+}
+
+module.exports.encodeTime = encodeTime
+module.exports.decodeTime = parseTimeToDate
 
 const parseHexToTime = (hex)=>{
     const time =  {
