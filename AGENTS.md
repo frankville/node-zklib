@@ -135,7 +135,7 @@ Device Clock
 - `getTime` rejects (`ERR_GET_TIME_REJECTED`) anything but `ACK_OK` with exactly 4 payload bytes, so another command's reply is never decoded as a clock.
 - `setTime` requires `ACK_OK` (`ERR_SET_TIME_REJECTED`) and then reads the clock back; a read-back more than `toleranceMs` (default 5000) from the written value plus elapsed time, either way, rejects with `ERR_SET_TIME_NOT_PERSISTED`. The comparison is on wall fields, not instants: in the repeated autumn DST hour a decoded `Date` resolves to the first offset, so an instant comparison reads a correct clock an hour off.
 - Opt-in only: the library never calls either method on its own. Connecting, the realtime listener and every other command leave the device clock as it is.
-- Confirmed on one terminal over TCP and UDP: the reply layout above, and a write that persists without `disableDevice` / `refreshData` around it. `test/e2e-device-time.spec.js` reads with `ZKLIB_E2E_IP` set and writes only with `ZKLIB_E2E_TIME_WRITE=1` (moves the clock 10 minutes, verifies, restores host time).
+- Confirmed on one terminal: the reply layout above, read over TCP and UDP, and a write over TCP that persists without `disableDevice` / `refreshData` around it. A UDP write is untested; one the device ignored would still fail the read-back. `test/e2e-device-time.spec.js` reads with `ZKLIB_E2E_IP` set and writes only with `ZKLIB_E2E_TIME_WRITE=1` (moves the clock 10 minutes, verifies, restores host time).
 
 Integration Patterns
 - Typical flow in apps:
