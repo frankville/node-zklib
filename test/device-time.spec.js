@@ -51,6 +51,38 @@ describe('device time encoding', () => {
   });
 });
 
+// In the repeated autumn hour a decoded wall time resolves to the first offset, so the read-back
+// of a write that persisted reads an hour off as an instant. Run in a child with
+// TZ=Europe/Madrid: this process's zone is whatever the host has.
+describe('device time across the repeated autumn hour', () => {
+  it('accepts the read-back of a write made during the second 02:30 in Madrid', () => {
+    const { execFileSync } = require('child_process');
+    const script = `
+      const sinon = require(${JSON.stringify(require.resolve('sinon'))});
+      const ZKLibUDP = require(${JSON.stringify(require.resolve('../zklibudp'))});
+      const { COMMANDS } = require(${JSON.stringify(require.resolve('../constants'))});
+      const { encodeTime } = require(${JSON.stringify(require.resolve('../utils'))});
+      const written = new Date(Date.parse('2026-10-25T01:30:00.000Z')); // the second 02:30 (CET)
+      const header = (command) => { const b = Buffer.alloc(8); b.writeUInt16LE(command, 0); return b; };
+      const zk = new ZKLibUDP('127.0.0.1', 4370, 1000, 5500);
+      let stored = null;
+      sinon.stub(zk, 'executeCmd').callsFake(async (command, payload) => {
+        if (command === COMMANDS.CMD_SET_TIME) { stored = payload.readUInt32LE(0); return header(COMMANDS.CMD_ACK_OK); }
+        const p = Buffer.alloc(4); p.writeUInt32LE(stored, 0);
+        return Buffer.concat([header(COMMANDS.CMD_ACK_OK), p]);
+      });
+      zk.setTime(written).then(
+        readback => process.stdout.write(JSON.stringify({ ok: true, hours: written.getHours(), readback: readback.getHours() })),
+        err => process.stdout.write(JSON.stringify({ ok: false, code: err.code }))
+      );
+    `;
+    const out = JSON.parse(execFileSync(process.execPath, ['-e', script], {
+      env: { ...process.env, TZ: 'Europe/Madrid' }
+    }).toString());
+    expect(out).to.deep.equal({ ok: true, hours: 2, readback: 2 });
+  });
+});
+
 [
   ['UDP', () => new ZKLibUDP('127.0.0.1', 4370, 1000, 5500)],
   ['TCP', () => new ZKLibTCP('127.0.0.1', 4370, 1000)]
@@ -130,6 +162,20 @@ describe('device time encoding', () => {
       expect(err).to.be.an('error');
       expect(err.code).to.equal('ERR_SET_TIME_NOT_PERSISTED');
       expect(err.differenceMs).to.be.closeTo(24 * 3600 * 1000, 5000);
+    });
+
+    it('rejects an acknowledged write the clock shows behind, as well as ahead', async () => {
+      const zk = create();
+      const executeStub = sinon.stub(zk, 'executeCmd');
+      executeStub.onFirstCall().resolves(reply(COMMANDS.CMD_ACK_OK));
+      // A write the terminal ignored, on a clock that was behind.
+      executeStub.onSecondCall().resolves(timeReply(new Date(2026, 9, 29, 17, 0, 0)));
+
+      const err = await zk.setTime(KNOWN_WALL_TIME()).then(() => null, e => e);
+
+      expect(err).to.be.an('error');
+      expect(err.code).to.equal('ERR_SET_TIME_NOT_PERSISTED');
+      expect(err.differenceMs).to.be.closeTo(-24 * 3600 * 1000, 5000);
     });
 
     it('refuses a date it cannot encode before sending anything', async () => {

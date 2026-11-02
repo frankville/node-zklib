@@ -10,6 +10,12 @@ const { encodeTime, decodeTime } = require('../utils');
 // keeps running between the write and the read, and the device stores whole seconds.
 const DEFAULT_READBACK_TOLERANCE_MS = 5000;
 
+// Wall time as milliseconds of a zone-less calendar. The device stores wall time, and a decoded
+// Date in the repeated autumn hour resolves to the first offset, so comparing instants there reads
+// a correct clock as an hour off. Comparing wall fields does not depend on the offset.
+const wallMs = (date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(),
+    date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds());
+
 const replyCommand = (reply) => (
     Buffer.isBuffer(reply) && reply.length >= 8 ? reply.readUInt16LE(0) : null
 );
@@ -56,8 +62,8 @@ const writeTime = async (transport, date, options = {}) => {
     await writeTimeRaw(transport, date);
     const readback = await readTime(transport);
     // The device clock has run on since the write; expect it ahead by about the elapsed time.
-    const expected = date.getTime() + (Date.now() - startedAt);
-    const differenceMs = readback.getTime() - expected;
+    const expected = wallMs(date) + (Date.now() - startedAt);
+    const differenceMs = wallMs(readback) - expected;
     if (Math.abs(differenceMs) > toleranceMs) {
         const error = new Error(
             `device time write not persisted — wrote ${date.toISOString()}, ` +
