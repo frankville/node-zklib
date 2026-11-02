@@ -3,8 +3,8 @@ const { encodeTime, decodeTime } = require('../utils');
 
 // The device clock is plain wall time with no zone (`CMD_GET_TIME` / `CMD_SET_TIME`, one u32 in
 // the packed form attendance records use). Both directions go through the local fields of a
-// `Date`, so the host's timezone is what gives the value its meaning: write from a host in the
-// site's zone, as the realtime decoders already assume when they read event times.
+// `Date`, so the host's timezone is what gives the value its meaning: write from a host set to
+// the zone the device is meant to keep, as the realtime decoders already assume for event times.
 
 // Seconds of disagreement a read-back may show and still count as the value written: the clock
 // keeps running between the write and the read, and the device stores whole seconds.

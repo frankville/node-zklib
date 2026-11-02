@@ -154,7 +154,7 @@ describe('device time across the repeated autumn hour', () => {
       const zk = create();
       const executeStub = sinon.stub(zk, 'executeCmd');
       executeStub.onFirstCall().resolves(reply(COMMANDS.CMD_ACK_OK));
-      // The skew of 2026-10-30: the clock still a day ahead after the write.
+      // A clock still a day ahead after the write.
       executeStub.onSecondCall().resolves(timeReply(new Date(2026, 9, 31, 17, 0, 0)));
 
       const err = await zk.setTime(KNOWN_WALL_TIME()).then(() => null, e => e);
