@@ -443,6 +443,25 @@ class ZKLib {
         
     }
 
+    /**
+     * Checks that the realtime connection opened by getRealTimeLogs() is still alive:
+     * resolves `true` when the device acknowledges a repeat of the registration within
+     * `options.timeoutMs` (default 10000). TCP only. Failures arrive as a ZKError whose
+     * `err.message`/`err.code` is `REALTIME_PROBE_TIMEOUT`, `REALTIME_NOT_REGISTERED`,
+     * `NO_SOCKET`, `SOCKET_CLOSED` or the socket's own error; see ZKLibTCP.probeRealTime().
+     * The library does not act on a failure: reconnecting is the caller's decision.
+     */
+    async probeRealTime(options = {}){
+        return await this.functionWrapper(
+            ()=> this.zklibTcp.probeRealTime(options),
+            ()=> Promise.reject(Object.assign(
+                new Error('REALTIME_PROBE_NOT_SUPPORTED_ON_UDP'),
+                { code: 'REALTIME_PROBE_NOT_SUPPORTED_ON_UDP' }
+            )),
+            'probeRealTime'
+        )
+    }
+
     async openDoor(){
         return await this. functionWrapper(
             ()=> this.zklibTcp.openDoor(),
