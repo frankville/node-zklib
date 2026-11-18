@@ -36,6 +36,10 @@ class FakeSocket extends EventEmitter {
     super();
     this.writes = [];
     this.onWrite = null;
+    // When true, end() never completes and never emits 'close', like a peer that
+    // stops answering.
+    this.silentEnd = false;
+    this.destroyed = false;
   }
 
   setTimeout() {}
@@ -52,10 +56,19 @@ class FakeSocket extends EventEmitter {
   }
 
   end(cb) {
+    if (this.silentEnd) return this;
     process.nextTick(() => {
       this.emit('close', false);
       if (cb) cb();
     });
+    return this;
+  }
+
+  destroy() {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    process.nextTick(() => this.emit('close', false));
+    return this;
   }
 
   reset() {
@@ -170,19 +183,86 @@ describe('ZKLibTCP realtime liveness probe', () => {
 
       expect(linesAt(calls, 'warn', /realtime frame filtered/)).to.have.length(1);
     });
+  });
 
-    it('keeps the warning for an ACK whose reply id matches neither the probe nor the registration', async () => {
+  describe('which frames answer a probe', () => {
+    beforeEach(open);
+
+    const probeAndSend = async (frameFor) => {
       const registerFrame = await register();
-      const pending = zk.probeRealTime({ timeoutMs: 50 });
+      const pending = zk.probeRealTime({ timeoutMs: 1000 });
       const probeFrame = socket.writes[socket.writes.length - 1];
-      const unrelated = (Math.max(replyIdOf(registerFrame), replyIdOf(probeFrame)) + 7) % 65535;
+      socket.emit('data', frameFor({ registerFrame, probeFrame }));
+      return pending;
+    };
 
-      socket.emit('data', ackFrame(unrelated));
+    it('a realtime event received after the write answers it, and is still delivered', async () => {
+      expect(await probeAndSend(() => realtimeEventFrame())).to.equal(true);
+      expect(events).to.have.length(1);
+      expect(events[0].user_sn).to.equal(1);
+    });
 
+    it('a CMD_ACK_OK with the probe reply id answers it, logged at debug', async () => {
+      expect(await probeAndSend(({ probeFrame }) => ackFrame(replyIdOf(probeFrame)))).to.equal(true);
+      expect(linesAt(calls, 'debug', /realtime probe acknowledged/)).to.have.length(1);
+      expect(linesAt(calls, 'warn', /realtime frame filtered/)).to.have.length(0);
+    });
+
+    // -1 would be the registration's own reply id, which is logged at debug.
+    [1, -2, 1000].forEach(offset => {
+      it(`a CMD_ACK_OK with another reply id (probe ${offset > 0 ? '+' : ''}${offset}) answers it, logged at warn`, async () => {
+        const other = ({ probeFrame }) => ackFrame((replyIdOf(probeFrame) + offset + 65535) % 65535);
+        expect(await probeAndSend(other)).to.equal(true);
+        const warns = linesAt(calls, 'warn', /realtime frame filtered/);
+        expect(warns).to.have.length(1);
+        expect(warns[0].meta.replyId).to.equal((replyIdOf(socket.writes[1]) + offset + 65535) % 65535);
+        expect(linesAt(calls, 'debug', /acknowledged/)).to.have.length(0);
+      });
+    });
+
+    it('a CMD_ACK_ERROR answers it, logged at warn even with the probe reply id', async () => {
+      const ackError = ({ probeFrame }) => deviceFrame(COMMANDS.CMD_ACK_ERROR, 12, replyIdOf(probeFrame));
+      expect(await probeAndSend(ackError)).to.equal(true);
       expect(linesAt(calls, 'warn', /realtime frame filtered/)).to.have.length(1);
-      let error = null;
-      try { await pending; } catch (err) { error = err; }
-      expect(error && error.code).to.equal('ERR_REALTIME_PROBE_TIMEOUT');
+      expect(linesAt(calls, 'debug', /acknowledged/)).to.have.length(0);
+    });
+
+    it('a frame received before the write does not answer it', async () => {
+      await register();
+      const event = realtimeEventFrame();
+      // The first half of an event is already buffered when the probe is written.
+      socket.emit('data', event.subarray(0, 12));
+      const pending = zk.probeRealTime({ timeoutMs: 1000 });
+      const probeFrame = socket.writes[socket.writes.length - 1];
+
+      socket.emit('data', event.subarray(12));
+
+      expect(events).to.have.length(1);
+      expect(zk._realtimeProbe).to.not.equal(null);
+
+      socket.emit('data', ackFrame(replyIdOf(probeFrame)));
+      expect(await pending).to.equal(true);
+    });
+
+    it('a frame received and handled before the probe does not answer it', async () => {
+      await register();
+      socket.emit('data', realtimeEventFrame());
+      zk.probeRealTime({ timeoutMs: 1000 }).catch(() => {});
+
+      expect(zk._realtimeProbe).to.not.equal(null);
+      await zk.closeSocket();
+    });
+
+    it('still logs the probe ACK at debug when an earlier frame already answered the probe', async () => {
+      await register();
+      const pending = zk.probeRealTime({ timeoutMs: 1000 });
+      const probeFrame = socket.writes[socket.writes.length - 1];
+
+      socket.emit('data', Buffer.concat([realtimeEventFrame(), ackFrame(replyIdOf(probeFrame))]));
+
+      expect(await pending).to.equal(true);
+      expect(linesAt(calls, 'debug', /realtime probe acknowledged/)).to.have.length(1);
+      expect(linesAt(calls, 'warn', /realtime frame filtered/)).to.have.length(0);
     });
   });
 
@@ -216,7 +296,8 @@ describe('ZKLibTCP realtime liveness probe', () => {
 
     it('keeps the reply id within 16 bits on a long-lived socket', async () => {
       await register();
-      zk.replyId = 65534;
+      // createTCPHeader() writes the reply id as a u16 and throws past 65535.
+      zk.replyId = 65535;
 
       const pending = zk.probeRealTime({ timeoutMs: 1000 });
       const probeFrame = socket.writes[socket.writes.length - 1];
@@ -354,6 +435,37 @@ describe('ZKLibTCP realtime liveness probe', () => {
       expect(error && error.code).to.equal('ERR_REALTIME_PROBE_SOCKET_CLOSED');
     });
 
+    it('settles a pending probe on teardown even when end() never emits close', async () => {
+      socket.silentEnd = true;
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const pending = zk.probeRealTime({ timeoutMs: 10000 });
+      const started = Date.now();
+
+      const closing = zk.closeSocket();
+
+      let error = null;
+      try { await pending; } catch (err) { error = err; }
+      expect(error && error.code).to.equal('ERR_REALTIME_PROBE_SOCKET_CLOSED');
+      expect(Date.now() - started).to.be.below(500);
+      clock.tick(2000);
+      await closing;
+    });
+
+    it('forgets the registration on teardown, so a later probe on that socket is refused unwritten', async () => {
+      socket.silentEnd = true;
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const writesBefore = socket.writes.length;
+      const closing = zk.closeSocket();
+
+      let error = null;
+      try { await zk.probeRealTime({ timeoutMs: 1000 }); } catch (err) { error = err; }
+      expect(zk.socket).to.equal(socket);
+      expect(error && error.code).to.equal('ERR_REALTIME_NOT_REGISTERED');
+      expect(socket.writes).to.have.length(writesBefore);
+      clock.tick(2000);
+      await closing;
+    });
+
     it('does not close or reconnect the socket itself when a probe fails', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const end = sinon.spy(socket, 'end');
@@ -364,6 +476,36 @@ describe('ZKLibTCP realtime liveness probe', () => {
       expect(end.called).to.equal(false);
       expect(zk.socket).to.equal(socket);
       expect(socket.writes).to.have.length(2);
+    });
+  });
+
+  describe('listener hygiene', () => {
+    it('leaves the socket error/close listener counts at their baseline after many probes', async () => {
+      await open();
+      await register();
+      const baseline = { error: socket.listenerCount('error'), close: socket.listenerCount('close') };
+      const lastWrite = () => socket.writes[socket.writes.length - 1];
+
+      for (let i = 0; i < 20; i += 1) {
+        const pending = zk.probeRealTime({ timeoutMs: 1000 });
+        socket.emit('data', ackFrame(replyIdOf(lastWrite())));
+        await pending;
+      }
+      for (let i = 0; i < 5; i += 1) {
+        const pending = zk.probeRealTime({ timeoutMs: 1000 });
+        socket.emit('data', realtimeEventFrame());
+        await pending;
+      }
+      for (let i = 0; i < 5; i += 1) {
+        try { await zk.probeRealTime({ timeoutMs: 1 }); } catch (err) { /* timed out */ }
+      }
+      socket.onWrite = (msg, cb) => { cb(new Error('write EPIPE')); return false; };
+      for (let i = 0; i < 5; i += 1) {
+        try { await zk.probeRealTime({ timeoutMs: 1000 }); } catch (err) { /* write failed */ }
+      }
+
+      expect(socket.listenerCount('error')).to.equal(baseline.error);
+      expect(socket.listenerCount('close')).to.equal(baseline.close);
     });
   });
 
@@ -441,6 +583,38 @@ describe('ZKLibTCP teardown of a connection that is already gone', () => {
     expect(cbClose.calledOnceWithExactly('tcp')).to.equal(true);
     expect(socket.listenerCount('error')).to.equal(0);
     expect(socket.listenerCount('close')).to.equal(0);
+  });
+
+  it('closeSocket() destroys a socket whose end() never completes, after its 2 s fallback', async () => {
+    const socket = new FakeSocket();
+    sinon.stub(net, 'Socket').returns(socket);
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 10000);
+    const cbClose = sinon.spy();
+    await zk.createSocket(undefined, cbClose);
+    socket.silentEnd = true;
+    const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const closing = zk.closeSocket();
+    clock.tick(1999);
+    expect(socket.destroyed).to.equal(false);
+    clock.tick(1);
+
+    expect(await closing).to.equal(true);
+    expect(socket.destroyed).to.equal(true);
+    clock.restore();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(cbClose.calledOnceWithExactly('tcp')).to.equal(true);
+    expect(zk.socket).to.equal(null);
+  });
+
+  it('closeSocket() does not destroy a socket whose end() completes', async () => {
+    const socket = new FakeSocket();
+    sinon.stub(net, 'Socket').returns(socket);
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 10000);
+    await zk.createSocket();
+
+    expect(await zk.closeSocket()).to.equal(true);
+    expect(socket.destroyed).to.equal(false);
   });
 
   it('disconnect() still waits for the ACK of CMD_EXIT on a live socket', async () => {
