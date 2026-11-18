@@ -445,8 +445,8 @@ class ZKLib {
 
     /**
      * Checks that the realtime connection opened by getRealTimeLogs() is still alive:
-     * resolves `true` when the device acknowledges a repeat of the registration within
-     * `options.timeoutMs` (default 10000). TCP only. Failures arrive as a ZKError whose
+     * repeats the registration and resolves `true` when any complete frame arrives on the
+     * realtime socket after it, within `options.timeoutMs` (default 10000). TCP only. Failures arrive as a ZKError whose
      * `err.code` is `ERR_REALTIME_PROBE_TIMEOUT`, `ERR_REALTIME_NOT_REGISTERED`,
      * `ERR_REALTIME_PROBE_SOCKET_CLOSED`, or the socket's own error (e.g. `ECONNRESET`);
      * see ZKLibTCP.probeRealTime(). Without a socket it is the facade's usual
