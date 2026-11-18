@@ -240,6 +240,30 @@ The high‑level API maps to zk‑protocol commands as follows:
 | `getUnlockGroups()` | `CMD_ULG_RRQ` | Reads all combinations; supports compact ASCII replies like `1:::::::::`. |
 | `setUnlockGroups(info, options?)` | `CMD_ULG_WRQ` | Writes compact ASCII unlock-group config from `combinations`; verified by default (also confirms omitted combinations were cleared). Raw strings/Buffers skip verification. |
 | `getRealTimeLogs(cb)` | `CMD_REG_EVENT` | Emits realtime frames; see EF_* flags below. |
+| `probeRealTime({ timeoutMs }?)` | `CMD_REG_EVENT` | TCP only. Checks that the realtime connection is still alive: repeats the registration on the realtime socket and resolves `true` on the first complete frame the device sends on it afterwards, normally its `CMD_ACK_OK` (default timeout 10000 ms). See "Realtime liveness" below. |
+
+### Realtime liveness (TCP)
+
+A realtime connection that the device or the network dropped without closing it stays open on the client's side, and since the client never sends on it, nothing ever fails: events simply stop arriving. `probeRealTime()` gives a caller a bounded answer:
+
+```js
+await zk.getRealTimeLogs(onEvent);
+// later, e.g. on a timer
+try {
+  await zk.probeRealTime({ timeoutMs: 10000 });
+} catch (e) {
+  // e.err.code: ERR_REALTIME_PROBE_TIMEOUT, ERR_REALTIME_PROBE_SOCKET_CLOSED, ECONNRESET, ...
+  // the connection is not usable: tear it down and reconnect
+}
+```
+
+- Rejects with `err.code` `ERR_REALTIME_PROBE_TIMEOUT` when no acknowledgement arrives in time; `ERR_REALTIME_PROBE_SOCKET_CLOSED`, or the socket's own error (for example `ECONNRESET`), as soon as the socket closes or errors; and `ERR_REALTIME_NOT_REGISTERED` (nothing sent) before `getRealTimeLogs()` has run on the current socket. With no socket the facade rejects with its usual "Socket isn't connected" error. Through the facade every failure arrives wrapped in a `ZKError` (`e.err.code`, `e.err.message`).
+- What proves liveness: any complete frame received on the realtime socket after the probe is written, whether the device's `CMD_ACK_OK` (with any reply id), a `CMD_ACK_ERROR` or a realtime event. A frame already partly received before the write does not count. A realtime event that answers a probe is still delivered to the `getRealTimeLogs()` callback as usual.
+- One probe at a time: a call while one is pending returns the same promise.
+- The library never acts on a failed probe. Closing and reconnecting is the caller's decision; the error/close callbacks given to `createSocket` still fire as before.
+- UDP rejects with `ERR_REALTIME_PROBE_UNSUPPORTED`.
+- A `CMD_ACK_OK` carrying the reply id of the registration or of the latest probe is logged at `debug`; any other non-realtime frame on the realtime stream is still logged as `realtime frame filtered` at `warn`, with its reply id.
+- `closeSocket()` rejects a pending probe at once, and if the socket's `end()` has not completed after 2 s it destroys the socket instead of leaving it half-open.
 
 Event flags used in realtime:
 - `EF_ATTLOG` (1): attendance/log event. Decoded attendance events include a `denied` boolean and the raw `verif_state` (`0` = access granted, `0x87`/`135` = denied on ZEM760 fw 6.60). A denied punch is still an `EF_ATTLOG` event, so check `denied` rather than assuming `event_type=1` means access was granted.
