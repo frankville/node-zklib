@@ -119,13 +119,23 @@ Realtime Events
   - Biometric/card verify failure: `event_type=128` often with an invalid user signature (0xFFFFFFFF). We return an empty payload to signal failure.
   - Wrong PIN/password: many devices don’t emit `EF_VERIFY` for wrong passwords; instead, if “Illegal Verify/Misoperation” is enabled, they emit `EF_ALARM` (512) with `alarm_type="misoperation"`. Otherwise no frame may be sent.
 
+Realtime Liveness (TCP)
+- The realtime socket is receive-only, so a connection dropped without a FIN (peer restarted, network outage, idle connection forgotten by the device) stays open on our side and nothing ever fails. `probeRealTime({ timeoutMs = 10000 })` (`zklibtcp.js`, facade `zklib.js`) is how a caller finds out.
+- It re-sends `CMD_REG_EVENT` with the payload/flags the last `getRealTimeLogs()` registered, written with `socket.write` on the realtime socket, and resolves `true` on the device's `CMD_ACK_OK`. A live session answers the repeated registration with `CMD_ACK_OK` on the realtime stream; a peer that forgot the connection answers any write with a TCP reset within tens of milliseconds (`error` ECONNRESET, then `close`).
+- **Never route it through `executeCmd`/`writeMessage`**: their `once('data')` would consume the next realtime frame, and a slipped realtime stream cannot be resynchronised. The ACK is matched inside `_realtimeDataHandler`'s filtered (non-realtime) branch, by the header `replyId`; the zk-protocol reference states a valid reply carries the request's reply number. The wire `replyId` is read back from the built frame, since `createTCPHeader` writes `replyId + 1`.
+- Errors (`err.code`): `ERR_REALTIME_NOT_REGISTERED` (no registration on the *current* socket; nothing written), `ERR_REALTIME_PROBE_TIMEOUT` (with `err.timeoutMs`), `ERR_REALTIME_PROBE_SOCKET_CLOSED` (no socket, or the socket closed or was torn down mid-probe; settles at once), or the socket's own error unchanged (`ECONNRESET`, a write error). The facade answers a missing socket with its usual "Socket isn't connected", and UDP with `ERR_REALTIME_PROBE_UNSUPPORTED`.
+- One probe in flight; concurrent calls share its promise. The probe never closes, reconnects or retries; the `createSocket` error/close callbacks fire exactly as before.
+- Logging: the ACK of the registration or a probe is `debug`; every other filtered frame keeps its `warn` (now with `replyId`, so an ACK the matcher missed is diagnosable).
+- `this.replyId` is wrapped to 16 bits by the probe; `createTCPHeader` throws on a u16 overflow, which a socket probed periodically for weeks would otherwise reach.
+- Teardown of a connection that is already gone: `closeSocket()` resolves at once when the close handler has already nulled `this.socket`, and `disconnect()` stops waiting for `CMD_EXIT`'s ACK as soon as the socket errors or closes (a reset peer answers `CMD_EXIT` with ECONNRESET).
+
 Public API (Facade)
 - Usage pattern:
   - `const ZKLib = require('node-zklib');`
   - `const zk = new ZKLib(ip, 4370, timeoutMs, inportForUDP);`
   - `zk.connectionType = 'udp' | 'tcp';`
   - `await zk.createSocket(onError, onClose, onTimeout);`
-  - Calls: `zk.getUsers()`, `zk.setUser()`, `zk.deleteUser()`, `zk.getTimezone(i)`, `zk.setTimezone(info)`, `zk.getUserTimezones(uid)`, `zk.setUserTimezones(info)`, `zk.getGroupTimezones(g)`, `zk.setGroupTimezones(info)`, `zk.getUserGroup(uid)`, `zk.setUserGroup(info)`, `zk.getUnlockGroups()`, `zk.setUnlockGroup(info)`, `zk.setUnlockGroups(info)`, `zk.openDoor()`.
+  - Calls: `zk.getUsers()`, `zk.setUser()`, `zk.deleteUser()`, `zk.getTimezone(i)`, `zk.setTimezone(info)`, `zk.getUserTimezones(uid)`, `zk.setUserTimezones(info)`, `zk.getGroupTimezones(g)`, `zk.setGroupTimezones(info)`, `zk.getUserGroup(uid)`, `zk.setUserGroup(info)`, `zk.getUnlockGroups()`, `zk.setUnlockGroup(info)`, `zk.setUnlockGroups(info)`, `zk.openDoor()`, `zk.getRealTimeLogs(cb)`, `zk.probeRealTime({ timeoutMs })` (TCP only; see Realtime Liveness).
   - For writes, callers often follow with `zk.refreshData()` to ensure persistence.
 
 Device Clock

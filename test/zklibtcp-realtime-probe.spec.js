@@ -182,7 +182,7 @@ describe('ZKLibTCP realtime liveness probe', () => {
       expect(linesAt(calls, 'warn', /realtime frame filtered/)).to.have.length(1);
       let error = null;
       try { await pending; } catch (err) { error = err; }
-      expect(error && error.message).to.equal('REALTIME_PROBE_TIMEOUT');
+      expect(error && error.code).to.equal('ERR_REALTIME_PROBE_TIMEOUT');
     });
   });
 
@@ -249,7 +249,7 @@ describe('ZKLibTCP realtime liveness probe', () => {
       clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     });
 
-    it('rejects with REALTIME_PROBE_TIMEOUT when no ACK arrives, and clears its timer', async () => {
+    it('rejects with ERR_REALTIME_PROBE_TIMEOUT when no ACK arrives, and clears its timer', async () => {
       const pending = zk.probeRealTime({ timeoutMs: 10000 });
       expect(clock.countTimers()).to.equal(1);
 
@@ -260,8 +260,8 @@ describe('ZKLibTCP realtime liveness probe', () => {
       let error = null;
       try { await pending; } catch (err) { error = err; }
       expect(error).to.be.instanceOf(Error);
-      expect(error.message).to.equal('REALTIME_PROBE_TIMEOUT');
-      expect(error.code).to.equal('REALTIME_PROBE_TIMEOUT');
+      expect(error.code).to.equal('ERR_REALTIME_PROBE_TIMEOUT');
+      expect(error.timeoutMs).to.equal(10000);
       expect(clock.countTimers()).to.equal(0);
       expect(zk._realtimeProbe).to.equal(null);
     });
@@ -274,7 +274,7 @@ describe('ZKLibTCP realtime liveness probe', () => {
 
       let error = null;
       try { await pending; } catch (err) { error = err; }
-      expect(error && error.message).to.equal('REALTIME_PROBE_TIMEOUT');
+      expect(error && error.code).to.equal('ERR_REALTIME_PROBE_TIMEOUT');
     });
 
     it('clears its timer when the ACK settles it', async () => {
@@ -321,15 +321,15 @@ describe('ZKLibTCP realtime liveness probe', () => {
       expect(socket.listenerCount('close')).to.equal(0);
     });
 
-    it('rejects promptly with SOCKET_CLOSED when the socket closes', async () => {
+    it('rejects promptly with ERR_REALTIME_PROBE_SOCKET_CLOSED when the socket closes', async () => {
       const pending = zk.probeRealTime({ timeoutMs: 10000 });
 
       socket.emit('close', false);
 
       let error = null;
       try { await pending; } catch (err) { error = err; }
-      expect(error && error.message).to.equal('SOCKET_CLOSED');
-      expect(error.code).to.equal('SOCKET_CLOSED');
+      expect(error).to.be.instanceOf(Error);
+      expect(error.code).to.equal('ERR_REALTIME_PROBE_SOCKET_CLOSED');
       expect(cbClose.calledOnceWithExactly('tcp')).to.equal(true);
       expect(cbError.called).to.equal(false);
     });
@@ -344,14 +344,14 @@ describe('ZKLibTCP realtime liveness probe', () => {
       expect(zk._realtimeProbe).to.equal(null);
     });
 
-    it('rejects a pending probe with SOCKET_CLOSED when the socket is torn down', async () => {
+    it('rejects a pending probe with ERR_REALTIME_PROBE_SOCKET_CLOSED when the socket is torn down', async () => {
       const pending = zk.probeRealTime({ timeoutMs: 10000 });
 
       await zk.closeSocket();
 
       let error = null;
       try { await pending; } catch (err) { error = err; }
-      expect(error && error.message).to.equal('SOCKET_CLOSED');
+      expect(error && error.code).to.equal('ERR_REALTIME_PROBE_SOCKET_CLOSED');
     });
 
     it('does not close or reconnect the socket itself when a probe fails', async () => {
@@ -368,25 +368,25 @@ describe('ZKLibTCP realtime liveness probe', () => {
   });
 
   describe('preconditions', () => {
-    it('rejects with NO_SOCKET without writing when there is no socket', async () => {
+    it('rejects with ERR_REALTIME_PROBE_SOCKET_CLOSED without writing when there is no socket', async () => {
       const tcp = new ZKLibTCP('127.0.0.1', 4370, 1000);
 
       let error = null;
       try { await tcp.probeRealTime(); } catch (err) { error = err; }
-      expect(error && error.message).to.equal('NO_SOCKET');
-      expect(error.code).to.equal('NO_SOCKET');
+      expect(error).to.be.instanceOf(Error);
+      expect(error.code).to.equal('ERR_REALTIME_PROBE_SOCKET_CLOSED');
     });
 
-    it('rejects with REALTIME_NOT_REGISTERED without writing before getRealTimeLogs()', async () => {
+    it('rejects with ERR_REALTIME_NOT_REGISTERED without writing before getRealTimeLogs()', async () => {
       await open();
 
       let error = null;
       try { await zk.probeRealTime(); } catch (err) { error = err; }
-      expect(error && error.message).to.equal('REALTIME_NOT_REGISTERED');
+      expect(error && error.code).to.equal('ERR_REALTIME_NOT_REGISTERED');
       expect(socket.writes).to.have.length(0);
     });
 
-    it('rejects with REALTIME_NOT_REGISTERED on a new socket that has not registered', async () => {
+    it('rejects with ERR_REALTIME_NOT_REGISTERED on a new socket that has not registered', async () => {
       await open();
       await register();
       const replacement = new FakeSocket();
@@ -394,7 +394,7 @@ describe('ZKLibTCP realtime liveness probe', () => {
 
       let error = null;
       try { await zk.probeRealTime(); } catch (err) { error = err; }
-      expect(error && error.message).to.equal('REALTIME_NOT_REGISTERED');
+      expect(error && error.code).to.equal('ERR_REALTIME_NOT_REGISTERED');
       expect(replacement.writes).to.have.length(0);
     });
   });
@@ -480,12 +480,12 @@ describe('ZKLib facade probeRealTime', () => {
   it('wraps a TCP probe failure in a ZKError that names the command', async () => {
     const zk = new ZKLib('127.0.0.1', 4370, 1000, 'tcp');
     zk.zklibTcp.socket = new EventEmitter();
-    sinon.stub(zk.zklibTcp, 'probeRealTime').rejects(Object.assign(new Error('REALTIME_PROBE_TIMEOUT'), { code: 'REALTIME_PROBE_TIMEOUT' }));
+    sinon.stub(zk.zklibTcp, 'probeRealTime').rejects(Object.assign(new Error('realtime probe not acknowledged within 10000 ms'), { code: 'ERR_REALTIME_PROBE_TIMEOUT' }));
 
     let error = null;
     try { await zk.probeRealTime(); } catch (err) { error = err; }
     expect(error.command).to.equal('[TCP] probeRealTime');
-    expect(error.err.message).to.equal('REALTIME_PROBE_TIMEOUT');
+    expect(error.err.code).to.equal('ERR_REALTIME_PROBE_TIMEOUT');
   });
 
   it('rejects when the TCP socket is not connected', async () => {
@@ -505,7 +505,7 @@ describe('ZKLib facade probeRealTime', () => {
     let error = null;
     try { await zk.probeRealTime(); } catch (err) { error = err; }
     expect(error.command).to.equal('[UDP] probeRealTime');
-    expect(error.err.code).to.equal('REALTIME_PROBE_NOT_SUPPORTED_ON_UDP');
+    expect(error.err.code).to.equal('ERR_REALTIME_PROBE_UNSUPPORTED');
     expect(udpWrite.called).to.equal(false);
   });
 });

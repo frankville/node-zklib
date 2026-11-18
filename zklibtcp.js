@@ -63,7 +63,14 @@ const USER_PACKET_PROBE_INTERVAL_MS = 30000
  */
 const DEFAULT_REALTIME_PROBE_TIMEOUT_MS = 10000
 
-const codedError = (code) => Object.assign(new Error(code), { code })
+// Typed errors in the repo's ERR_* convention: a readable message, the code on `.code`.
+const realtimeProbeError = (code, message, extra = {}) => {
+  const error = new Error(message)
+  error.code = code
+  return Object.assign(error, extra)
+}
+const probeSocketClosed = (message = 'realtime socket closed while the probe was pending') =>
+  realtimeProbeError('ERR_REALTIME_PROBE_SOCKET_CLOSED', message)
 
 
 const isPrintable = (value) => /^[\x20-\x7E]*$/.test(String(value || ''))
@@ -243,7 +250,7 @@ class ZKLibTCP {
       this._rtBuffer = Buffer.alloc(0);
       this._realtimeDataHandler = null;
       this._realtimeRegistration = null;
-      this._settleRealtimeProbe(this._realtimeProbe, codedError('SOCKET_CLOSED'))
+      this._settleRealtimeProbe(this._realtimeProbe, probeSocketClosed('realtime socket torn down while the probe was pending'))
       // The socket's close handler sets this.socket to null, so tearing down a
       // connection the peer has already reset finds nothing left to close.
       if (!this.socket) {
@@ -1123,13 +1130,15 @@ class ZKLibTCP {
    * handler, never through executeCmd()/writeMessage(): their `once('data')` would take
    * the next realtime event off this stream.
    *
-   * Rejects (with `err.code` set to the same string as the message):
-   * - `NO_SOCKET` — no socket; nothing is written.
-   * - `REALTIME_NOT_REGISTERED` — getRealTimeLogs() has not run on this socket; nothing is written.
-   * - `REALTIME_PROBE_TIMEOUT` — no acknowledgement within `timeoutMs`.
-   * - `SOCKET_CLOSED`, or the socket's own error (e.g. ECONNRESET) — the socket closed,
-   *   errored or was torn down while the probe was pending.
-   * - a socket write error.
+   * Rejects with an Error whose `code` is:
+   * - `ERR_REALTIME_PROBE_SOCKET_CLOSED` — there is no socket (nothing is written), or
+   *   the socket closed or was torn down while the probe was pending.
+   * - `ERR_REALTIME_NOT_REGISTERED` — getRealTimeLogs() has not run on this socket;
+   *   nothing is written.
+   * - `ERR_REALTIME_PROBE_TIMEOUT` — no acknowledgement within `timeoutMs`
+   *   (`err.timeoutMs` is attached).
+   * Or with the socket's own error, unchanged (e.g. `ECONNRESET`), when the socket
+   * errors while the probe is pending or the write fails.
    *
    * At most one probe is in flight: a call while one is pending returns that probe's
    * promise (and its timeout). What a failure means is the caller's decision; the
@@ -1145,11 +1154,14 @@ class ZKLibTCP {
 
     const socket = this.socket
     if (!socket) {
-      return Promise.reject(codedError('NO_SOCKET'))
+      return Promise.reject(probeSocketClosed('realtime probe needs a connected socket'))
     }
     const registration = this._realtimeRegistration
     if (!registration || registration.socket !== socket || !this._realtimeDataHandler) {
-      return Promise.reject(codedError('REALTIME_NOT_REGISTERED'))
+      return Promise.reject(realtimeProbeError(
+        'ERR_REALTIME_NOT_REGISTERED',
+        'realtime probe needs getRealTimeLogs() to have run on the current socket'
+      ))
     }
 
     const requested = Number(options && options.timeoutMs)
@@ -1176,12 +1188,16 @@ class ZKLibTCP {
       probe.resolve = resolve
       probe.reject = reject
     })
-    probe.onError = (err) => this._settleRealtimeProbe(probe, err || codedError('SOCKET_CLOSED'))
-    probe.onClose = () => this._settleRealtimeProbe(probe, codedError('SOCKET_CLOSED'))
+    probe.onError = (err) => this._settleRealtimeProbe(probe, err || probeSocketClosed())
+    probe.onClose = () => this._settleRealtimeProbe(probe, probeSocketClosed())
     socket.once('error', probe.onError)
     socket.once('close', probe.onClose)
     probe.timer = setTimeout(() => {
-      this._settleRealtimeProbe(probe, codedError('REALTIME_PROBE_TIMEOUT'))
+      this._settleRealtimeProbe(probe, realtimeProbeError(
+        'ERR_REALTIME_PROBE_TIMEOUT',
+        `realtime probe not acknowledged within ${timeoutMs} ms`,
+        { timeoutMs }
+      ))
     }, timeoutMs)
     this._realtimeProbe = probe
 
