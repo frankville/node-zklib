@@ -244,6 +244,38 @@ describe('ZKLibTCP realtime liveness probe', () => {
       expect(await pending).to.equal(true);
     });
 
+    const expectTimeout = async (pending) => {
+      let error = null;
+      try { await pending; } catch (err) { error = err; }
+      expect(error && error.code).to.equal('ERR_REALTIME_PROBE_TIMEOUT');
+    };
+
+    it('bytes after the write that never complete a frame do not answer it', async () => {
+      await register();
+      const pending = zk.probeRealTime({ timeoutMs: 30 });
+
+      // A frame header that declares far more payload than ever arrives: the stream
+      // keeps receiving bytes but is wedged behind a frame that never completes.
+      const header = Buffer.from([...TCP_PREFIX, 0xff, 0xff, 0x00, 0x00]);
+      socket.emit('data', Buffer.concat([header, Buffer.alloc(32)]));
+      socket.emit('data', Buffer.alloc(64));
+
+      await expectTimeout(pending);
+      expect(events).to.have.length(0);
+    });
+
+    it('bytes after the write that are discarded as lost sync do not answer it', async () => {
+      await register();
+      const pending = zk.probeRealTime({ timeoutMs: 30 });
+
+      socket.emit('data', Buffer.from('0102030405060708090a0b0c0d0e0f10', 'hex'));
+      socket.emit('data', Buffer.alloc(24, 0xaa));
+
+      expect(linesAt(calls, 'warn', /realtime stream lost sync/)).to.have.length(2);
+      await expectTimeout(pending);
+      expect(events).to.have.length(0);
+    });
+
     it('a frame received and handled before the probe does not answer it', async () => {
       await register();
       socket.emit('data', realtimeEventFrame());
@@ -605,6 +637,25 @@ describe('ZKLibTCP teardown of a connection that is already gone', () => {
     await new Promise(resolve => setImmediate(resolve));
     expect(cbClose.calledOnceWithExactly('tcp')).to.equal(true);
     expect(zk.socket).to.equal(null);
+  });
+
+  it('closeSocket() destroys only the socket it was called on, even if the socket is replaced meanwhile', async () => {
+    const socket = new FakeSocket();
+    sinon.stub(net, 'Socket').returns(socket);
+    const zk = new ZKLibTCP('127.0.0.1', 4370, 10000);
+    await zk.createSocket();
+    socket.silentEnd = true;
+    const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const closing = zk.closeSocket();
+    const replacement = new FakeSocket();
+    zk.socket = replacement;
+    clock.tick(2000);
+
+    expect(await closing).to.equal(true);
+    expect(socket.destroyed).to.equal(true);
+    expect(replacement.destroyed).to.equal(false);
+    clock.restore();
   });
 
   it('closeSocket() does not destroy a socket whose end() completes', async () => {
