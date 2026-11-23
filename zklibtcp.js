@@ -1,5 +1,5 @@
 const net = require('net')
-const { MAX_CHUNK, COMMANDS, REQUEST_DATA, TERMINAL_ACKS } = require('./constants')
+const { MAX_CHUNK, COMMANDS, REQUEST_DATA, TERMINAL_ACKS, USHRT_MAX } = require('./constants')
 const { createLogger } = require('./helpers/logger')
 const { createTCPHeader,
   exportErrorMessage,
@@ -55,6 +55,22 @@ const USER_PACKET_SIZE_72 = 72
  * a probe per pass.
  */
 const USER_PACKET_PROBE_INTERVAL_MS = 30000
+
+/**
+ * How long probeRealTime() waits for the device to acknowledge, unless the caller says
+ * otherwise. A live device answers in milliseconds; a peer that has forgotten the
+ * connection either resets it at once or stays silent, and silence is what this bounds.
+ */
+const DEFAULT_REALTIME_PROBE_TIMEOUT_MS = 10000
+
+// Typed errors in the repo's ERR_* convention: a readable message, the code on `.code`.
+const realtimeProbeError = (code, message, extra = {}) => {
+  const error = new Error(message)
+  error.code = code
+  return Object.assign(error, extra)
+}
+const probeSocketClosed = (message = 'realtime socket closed while the probe was pending') =>
+  realtimeProbeError('ERR_REALTIME_PROBE_SOCKET_CLOSED', message)
 
 
 const isPrintable = (value) => /^[\x20-\x7E]*$/.test(String(value || ''))
@@ -134,6 +150,13 @@ class ZKLibTCP {
     );
     this._rtBuffer = Buffer.alloc(0);
     this._realtimeDataHandler = null;
+    // What getRealTimeLogs() registered, on which socket, so probeRealTime() can repeat it.
+    this._realtimeRegistration = null;
+    // The probe in flight, if any — see probeRealTime().
+    this._realtimeProbe = null;
+    // Reply id of the most recent probe, kept after it settles so its own ACK is still
+    // recognised (and logged at debug) when another frame settled the probe first.
+    this._realtimeProbeReplyId = null;
     this.logger = options.logger || createLogger({
       namespace: 'node-zklib:tcp',
       baseMeta: { ip: this.ip, port: this.port, transport: 'tcp' },
@@ -229,16 +252,30 @@ class ZKLibTCP {
     return new Promise((resolve, reject) => {
       this._rtBuffer = Buffer.alloc(0);
       this._realtimeDataHandler = null;
-      this.socket.removeAllListeners('data')
-      this.socket.end(() => {
+      this._realtimeRegistration = null;
+      this._realtimeProbeReplyId = null;
+      this._settleRealtimeProbe(this._realtimeProbe, probeSocketClosed('realtime socket torn down while the probe was pending'))
+      // The socket's close handler sets this.socket to null, so tearing down a
+      // connection the peer has already reset finds nothing left to close.
+      const socket = this.socket
+      if (!socket) {
+        return resolve(true)
+      }
+      socket.removeAllListeners('data')
+      socket.end(() => {
         clearTimeout(timer)
         resolve(true)
       })
       /**
        * When socket isn't connected so this.socket.end will never resolve
-       * we use settimeout for handling this case
+       * we use settimeout for handling this case. A peer that never completes the
+       * close would otherwise leave the local socket half-open until the OS gives
+       * up on it, so destroy it here.
        */
       const timer = setTimeout(() => {
+        if (typeof socket.destroy === 'function' && !socket.destroyed) {
+          socket.destroy()
+        }
         resolve(true)
       }, 2000)
     })
@@ -690,10 +727,23 @@ class ZKLibTCP {
   }
 
   async disconnect() {
-    try {
-      await this.executeCmd(COMMANDS.CMD_EXIT, '')
-    } catch (err) {
+    const socket = this.socket
+    if (socket) {
+      // A peer that no longer knows the connection answers CMD_EXIT with a reset
+      // rather than an ACK. Once the socket errors or closes nothing more can
+      // arrive, so stop waiting then instead of running out CMD_EXIT's timeout.
+      let socketGone = null
+      const gone = new Promise(resolve => { socketGone = resolve })
+      socket.once('error', socketGone)
+      socket.once('close', socketGone)
+      try {
+        await Promise.race([this.executeCmd(COMMANDS.CMD_EXIT, ''), gone])
+      } catch (err) {
 
+      } finally {
+        socket.removeListener('error', socketGone)
+        socket.removeListener('close', socketGone)
+      }
     }
     return await this.closeSocket()
   }
@@ -972,6 +1022,7 @@ class ZKLibTCP {
 
     this.replyId++;
     this._rtBuffer = Buffer.alloc(0);
+    if (this._realtimeProbe) this._realtimeProbe.bytesBeforeWrite = 0
 
     const flags = options.flags
     const eventPayload = flags === undefined
@@ -995,6 +1046,12 @@ class ZKLibTCP {
       }
     })
 
+    this._realtimeRegistration = {
+      socket: this.socket,
+      payload: Buffer.from(eventPayload),
+      replyId: decodeTCPHeader(buf).replyId,
+    }
+
     const TCP_MAGIC = Buffer.from([0x50, 0x50, 0x82, 0x7d]);
     // Compact realtime attendance frames use: 8 (TCP prefix) + 8 (ZK inner header) + 12 (event data).
     const MIN_REALTIME_PACKET = 28;
@@ -1013,6 +1070,7 @@ class ZKLibTCP {
           // Lost sync on the stream, discard everything
           this.logger.warn('realtime stream lost sync, discarding buffer', this.logger.formatBuffer(this._rtBuffer))
           this._rtBuffer = Buffer.alloc(0);
+          if (this._realtimeProbe) this._realtimeProbe.bytesBeforeWrite = 0
           break;
         }
 
@@ -1025,6 +1083,7 @@ class ZKLibTCP {
         const message = this._rtBuffer.slice(0, totalLength);
         this._rtBuffer = this._rtBuffer.slice(totalLength);
         this.logger.trace('realtime frame', this.logger.formatBuffer(message))
+        this._noteRealtimeFrame(message)
 
         const classification = classifyTCPRealTimeEvent(message)
         this.logger.debug('realtime frame classified', {
@@ -1036,10 +1095,17 @@ class ZKLibTCP {
         if (!classification.isRealtime) {
           try {
             const header = decodeTCPHeader(message.subarray(0, 16))
+            if (this._isOwnRealtimeAck(header)) {
+              this.logger.debug(header.replyId === this._realtimeProbeReplyId
+                ? 'realtime probe acknowledged'
+                : 'realtime registration acknowledged', { replyId: header.replyId })
+              continue;
+            }
             const payload = removeTcpHeader(message)
             this.logger.warn('realtime frame filtered', {
               command: exportErrorMessage(header.commandId),
               commandId: header.commandId,
+              replyId: header.replyId,
               event: payload.length >= 6 ? payload.readUInt16LE(4) : 'unknown',
             })
           } catch (err) {
@@ -1066,6 +1132,164 @@ class ZKLibTCP {
 
     this.socket.on('data', this._realtimeDataHandler)
 
+  }
+
+  /**
+   * Finds out whether the realtime connection is still alive.
+   *
+   * A connection the peer dropped without a FIN looks open on this side for as long as
+   * nothing is sent on it, and the realtime socket is otherwise receive-only. This
+   * re-sends the CMD_REG_EVENT registration that getRealTimeLogs() made, on the same
+   * socket and with the same flags, and resolves `true` as soon as **any complete frame**
+   * arrives on that socket after the write: the device's CMD_ACK_OK (whatever its reply
+   * id), a CMD_ACK_ERROR, a realtime event, anything the realtime handler can frame.
+   * Any of them shows the connection is delivering. A peer that forgot the connection
+   * answers with a reset instead, which settles the probe through the socket's
+   * error/close. A frame that was partly or wholly received before the write does not
+   * count.
+   *
+   * The frame is written directly and the reply is matched inside the realtime data
+   * handler, never through executeCmd()/writeMessage(): their `once('data')` would take
+   * the next realtime event off this stream.
+   *
+   * Rejects with an Error whose `code` is:
+   * - `ERR_REALTIME_PROBE_SOCKET_CLOSED` — there is no socket (nothing is written), or
+   *   the socket closed or was torn down while the probe was pending.
+   * - `ERR_REALTIME_NOT_REGISTERED` — getRealTimeLogs() has not run on this socket;
+   *   nothing is written.
+   * - `ERR_REALTIME_PROBE_TIMEOUT` — no acknowledgement within `timeoutMs`
+   *   (`err.timeoutMs` is attached).
+   * Or with the socket's own error, unchanged (e.g. `ECONNRESET`), when the socket
+   * errors while the probe is pending or the write fails.
+   *
+   * At most one probe is in flight: a call while one is pending returns that probe's
+   * promise (and its timeout). What a failure means is the caller's decision; the
+   * probe never closes, reconnects or retries the socket itself.
+   *
+   * @param {{ timeoutMs?: number }} [options]
+   * @returns {Promise<true>}
+   */
+  probeRealTime(options = {}) {
+    if (this._realtimeProbe) {
+      return this._realtimeProbe.promise
+    }
+
+    const socket = this.socket
+    if (!socket) {
+      return Promise.reject(probeSocketClosed('realtime probe needs a connected socket'))
+    }
+    const registration = this._realtimeRegistration
+    if (!registration || registration.socket !== socket) {
+      return Promise.reject(realtimeProbeError(
+        'ERR_REALTIME_NOT_REGISTERED',
+        'realtime probe needs getRealTimeLogs() to have run on the current socket'
+      ))
+    }
+
+    const requested = Number(options && options.timeoutMs)
+    const timeoutMs = Number.isFinite(requested) && requested > 0
+      ? requested
+      : DEFAULT_REALTIME_PROBE_TIMEOUT_MS
+
+    // Kept within 16 bits: createTCPHeader() writes it as a u16, and a long-lived
+    // realtime socket probed periodically would otherwise outgrow it.
+    this.replyId = (this.replyId + 1) % USHRT_MAX
+    const buf = createTCPHeader(COMMANDS.CMD_REG_EVENT, this.sessionId, this.replyId, registration.payload)
+
+    const probe = {
+      socket,
+      replyId: decodeTCPHeader(buf).replyId,
+      // Bytes already in the realtime buffer when the probe is written. A frame that
+      // includes any of them began before the write and proves nothing about now.
+      bytesBeforeWrite: this._rtBuffer.length,
+      timer: null,
+      resolve: null,
+      reject: null,
+      promise: null,
+      onError: null,
+      onClose: null,
+    }
+    probe.promise = new Promise((resolve, reject) => {
+      probe.resolve = resolve
+      probe.reject = reject
+    })
+    probe.onError = (err) => this._settleRealtimeProbe(probe, err || probeSocketClosed())
+    probe.onClose = () => this._settleRealtimeProbe(probe, probeSocketClosed())
+    socket.once('error', probe.onError)
+    socket.once('close', probe.onClose)
+    probe.timer = setTimeout(() => {
+      this._settleRealtimeProbe(probe, realtimeProbeError(
+        'ERR_REALTIME_PROBE_TIMEOUT',
+        `realtime probe not acknowledged within ${timeoutMs} ms`,
+        { timeoutMs }
+      ))
+    }, timeoutMs)
+    this._realtimeProbe = probe
+    this._realtimeProbeReplyId = probe.replyId
+
+    this.logger.debug('realtime probe sent', { replyId: probe.replyId, timeoutMs })
+    this.logger.trace('realtime probe packet', this.logger.formatBuffer(buf))
+
+    try {
+      socket.write(buf, null, err => {
+        if (err) this._settleRealtimeProbe(probe, err)
+      })
+    } catch (err) {
+      this._settleRealtimeProbe(probe, err)
+    }
+
+    return probe.promise
+  }
+
+  /**
+   * Settles `probe` if it is still the one in flight; a stale caller is a no-op.
+   * `err` null resolves it, anything else rejects it.
+   */
+  _settleRealtimeProbe(probe, err) {
+    if (!probe || this._realtimeProbe !== probe) return
+    this._realtimeProbe = null
+    clearTimeout(probe.timer)
+    probe.socket.removeListener('error', probe.onError)
+    probe.socket.removeListener('close', probe.onClose)
+    if (err) {
+      this.logger.debug('realtime probe failed', { replyId: probe.replyId, error: err && err.message ? err.message : err })
+      probe.reject(err)
+    } else {
+      probe.resolve(true)
+    }
+  }
+
+  /**
+   * Called for every complete frame the realtime handler cuts from the stream, before
+   * it is classified, logged or delivered. Settles a pending probe once a frame that
+   * arrived entirely after the probe's write is seen; the frame itself is then handled
+   * exactly as it would be without a probe.
+   */
+  _noteRealtimeFrame(message) {
+    const probe = this._realtimeProbe
+    if (!probe) return
+    if (probe.bytesBeforeWrite > 0) {
+      probe.bytesBeforeWrite = Math.max(0, probe.bytesBeforeWrite - message.length)
+      return
+    }
+    this.logger.debug('realtime probe answered', {
+      replyId: probe.replyId,
+      commandId: message.length >= 10 ? message.readUInt16LE(8) : null,
+    })
+    this._settleRealtimeProbe(probe, null)
+  }
+
+  /**
+   * Whether a non-realtime frame on the realtime stream is the device acknowledging our
+   * own registration or most recent probe. This only chooses the log level: those are
+   * expected and logged at debug, every other filtered frame keeps its warning. It does
+   * not decide liveness — see _noteRealtimeFrame().
+   */
+  _isOwnRealtimeAck(header) {
+    if (header.commandId !== COMMANDS.CMD_ACK_OK) return false
+    const registration = this._realtimeRegistration
+    if (registration && header.replyId === registration.replyId) return true
+    return this._realtimeProbeReplyId !== null && header.replyId === this._realtimeProbeReplyId
   }
 
 }
