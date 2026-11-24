@@ -554,6 +554,15 @@ class ZKLibTCP {
               const packetLength = totalBuffer.readUIntLE(4, 2)
               if (totalBuffer.length < 8 + packetLength) break
 
+              // A realtime event and a chunk's closing CMD_ACK_OK carry none of the dataset.
+              // Counting their payload would push the chunk past its length. checkNotEventTCP
+              // above sees only a read that starts with an event, not one between frames.
+              const frameCommand = packetLength >= 2 ? totalBuffer.readUInt16LE(8) : null
+              if (frameCommand === COMMANDS.CMD_REG_EVENT || frameCommand === COMMANDS.CMD_ACK_OK) {
+                totalBuffer = totalBuffer.subarray(8 + packetLength)
+                continue
+              }
+
               realTotalBuffer = Buffer.concat([realTotalBuffer, totalBuffer.subarray(16, 8 + packetLength)])
               totalBuffer = totalBuffer.subarray(8 + packetLength)
 
@@ -570,8 +579,8 @@ class ZKLibTCP {
 
                 replyData = Buffer.concat([replyData, realTotalBuffer.subarray(8)])
                 // What follows a finished chunk is kept: with several chunks in flight it
-                // can already hold the start of the next one. The chunk's own CMD_ACK_OK
-                // carries no payload, so it adds nothing to the next chunk's data.
+                // can already hold the start of the next one. The chunk's own CMD_ACK_OK is
+                // skipped above, so it adds nothing to the next chunk's data.
                 realTotalBuffer = Buffer.from([])
 
                 totalPackets -= 1
