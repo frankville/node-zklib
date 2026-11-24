@@ -543,8 +543,16 @@ class ZKLibTCP {
             }, timeout)
 
             totalBuffer = Buffer.concat([totalBuffer, reply])
-            const packetLength = totalBuffer.readUIntLE(4, 2)
-            if (totalBuffer.length >= 8 + packetLength) {
+
+            // The device answers each CMD_DATA_RDY with CMD_PREPARE_DATA, CMD_DATA and
+            // CMD_ACK_OK back to back, without waiting for the client, so one socket read
+            // can carry several frames. Every complete frame in the buffer is handled here.
+            // Handling only the first one left the data frame sitting in the buffer when the
+            // three arrived together, and the read timed out with "1 PACKETS REMAIN".
+            // The 8-byte floor also keeps the length read inside the buffer on a fragment.
+            while (totalPackets > 0 && totalBuffer.length >= 8) {
+              const packetLength = totalBuffer.readUIntLE(4, 2)
+              if (totalBuffer.length < 8 + packetLength) break
 
               realTotalBuffer = Buffer.concat([realTotalBuffer, totalBuffer.subarray(16, 8 + packetLength)])
               totalBuffer = totalBuffer.subarray(8 + packetLength)
@@ -553,7 +561,9 @@ class ZKLibTCP {
                 || (totalPackets === 1 && realTotalBuffer.length === remain + 8)) {
 
                 replyData = Buffer.concat([replyData, realTotalBuffer.subarray(8)])
-                totalBuffer = Buffer.from([])
+                // What follows a finished chunk is kept: with several chunks in flight it
+                // can already hold the start of the next one. The chunk's own CMD_ACK_OK
+                // carries no payload, so it adds nothing to the next chunk's data.
                 realTotalBuffer = Buffer.from([])
 
                 totalPackets -= 1
@@ -561,6 +571,7 @@ class ZKLibTCP {
 
                 if (totalPackets <= 0) {
                   internalCallback(replyData)
+                  return
                 }
               }
             }
