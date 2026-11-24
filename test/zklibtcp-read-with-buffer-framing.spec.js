@@ -156,6 +156,17 @@ describe('ZKLibTCP.readWithBuffer frame grouping', function () {
     expect(Buffer.compare(result.data, data)).to.equal(0);
   });
 
+  // A frame whose length field is 0 or 1 has no room for a command id. Reading one anyway would
+  // throw out of the socket's 'data' handler when the runt is the last thing in the read.
+  for (const runtLength of [0, 1]) {
+    it(`survives a frame with length field ${runtLength} at the end of a read`, async () => {
+      const runt = Buffer.concat([Buffer.from([0x50, 0x50, 0x82, 0x7d, runtLength, 0, 0, 0]), Buffer.alloc(runtLength)]);
+      const { data, result } = await read(SMALL, (all, [p, d, a]) => [Buffer.concat([p, runt]), Buffer.concat([d, a])]);
+      expect(result.err).to.equal(null);
+      expect(Buffer.compare(result.data, data)).to.equal(0);
+    });
+  }
+
   // Both arms of the overshoot guard: the last chunk (SMALL) and a full chunk (two chunks).
   for (const [label, size] of [['a one-chunk read', SMALL], ['the first chunk of a two-chunk read', MAX_CHUNK + 100]]) {
     it(`fails at once, with no data, when a foreign data frame comes ahead of ${label}`, async () => {
