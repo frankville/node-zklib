@@ -116,6 +116,40 @@ describe('ZKLibTCP.readWithBuffer frame grouping', function () {
     expect(Buffer.compare(result.data, data)).to.equal(0);
   });
 
+  it('returns a two-chunk dataset when reads split inside the first chunk\'s ack and the next chunk\'s header', async () => {
+    const size = MAX_CHUNK + 100;
+    const firstAckStart = 24 + 16 + MAX_CHUNK;
+    const secondHeaderStart = firstAckStart + 16;
+    const { data, result } = await read(size, (all) => [
+      all.subarray(0, firstAckStart + 5),
+      all.subarray(firstAckStart + 5, secondHeaderStart + 11),
+      all.subarray(secondHeaderStart + 11),
+    ]);
+    expect(result.err).to.equal(null);
+    expect(Buffer.compare(result.data, data)).to.equal(0);
+  });
+
+  it('fails at once, with no data, when a foreign payload frame comes ahead of the data', async () => {
+    const stray = frame(COMMANDS.CMD_ACK_OK, Buffer.alloc(8, 0xee));
+    const started = Date.now();
+    const { result } = await read(SMALL, (all) => [Buffer.concat([stray, all])]);
+    expect(result.err).to.be.an('error');
+    expect(result.err.message).to.match(/MALFORMED CHUNK/);
+    expect(result.data.length).to.equal(0);
+    expect(Date.now() - started).to.be.below(500);
+  });
+
+  it('stops at the first overshoot instead of buffering a flood of small frames', async () => {
+    const tiny = frame(COMMANDS.CMD_DATA, Buffer.alloc(1000, 0x55));
+    const flood = Buffer.concat(Array.from({ length: 2000 }, () => tiny));
+    const started = Date.now();
+    const { result, zk } = await read(SMALL, () => [flood, flood]);
+    expect(result.err).to.be.an('error');
+    expect(result.err.message).to.match(/MALFORMED CHUNK/);
+    expect(zk.socket.listenerCount('data')).to.equal(0);
+    expect(Date.now() - started).to.be.below(500);
+  });
+
   it('stops listening once the dataset is complete', async () => {
     const { result, zk } = await read(SMALL, (all) => [all]);
     expect(result.err).to.equal(null);

@@ -4,7 +4,9 @@ const { expect } = require('chai');
 const ZKLib = require('../zklib');
 
 // Read-only. It reads the user table and the device's counters, and prints counts only, never
-// user records.
+// user records. Leave ZKLIB_E2E_LOG_LEVEL unset or below `trace`: at `trace` the library
+// hex-dumps command replies, and a device that answers a small read with the data directly
+// puts the user records, passwords included, in that dump.
 //
 // After CMD_DATA_RDY the device sends CMD_PREPARE_DATA, CMD_DATA and CMD_ACK_OK back to back.
 // Whether those reach the host in one socket read or several depends on the network and on
@@ -51,7 +53,7 @@ maybeDescribe('ZKLib TCP user read framing (e2e)', function () {
     }
   });
 
-  it('reads every user when the device\'s closing frames arrive in one socket read', async () => {
+  it('reads every user when the device\'s closing frames arrive in one socket read', async function () {
     const transport = zk.zklibTcp;
     const originalSendChunkRequest = transport.sendChunkRequest;
     const originalReadWithBuffer = transport.readWithBuffer;

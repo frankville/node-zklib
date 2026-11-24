@@ -557,6 +557,14 @@ class ZKLibTCP {
               realTotalBuffer = Buffer.concat([realTotalBuffer, totalBuffer.subarray(16, 8 + packetLength)])
               totalBuffer = totalBuffer.subarray(8 + packetLength)
 
+              // A chunk completes only on an exact length, so one that has run past it never
+              // will. Fail it now: waiting would only keep buffering whatever the peer sends,
+              // and with one copy per frame a flood of small frames costs CPU on every read.
+              if (realTotalBuffer.length > (totalPackets > 1 ? MAX_CHUNK : remain) + 8) {
+                internalCallback(replyData, new Error(`MALFORMED CHUNK: ${totalPackets} PACKETS REMAIN`))
+                return
+              }
+
               if ((totalPackets > 1 && realTotalBuffer.length === MAX_CHUNK + 8)
                 || (totalPackets === 1 && realTotalBuffer.length === remain + 8)) {
 
