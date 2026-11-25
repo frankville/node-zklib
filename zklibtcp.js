@@ -543,17 +543,44 @@ class ZKLibTCP {
             }, timeout)
 
             totalBuffer = Buffer.concat([totalBuffer, reply])
-            const packetLength = totalBuffer.readUIntLE(4, 2)
-            if (totalBuffer.length >= 8 + packetLength) {
+
+            // The device answers each CMD_DATA_RDY with CMD_PREPARE_DATA, CMD_DATA and
+            // CMD_ACK_OK back to back, without waiting for the client, so one socket read
+            // can carry several frames. Every complete frame in the buffer is handled here.
+            // Handling only the first one left the data frame sitting in the buffer when the
+            // three arrived together, and the read timed out with "1 PACKETS REMAIN".
+            // The 8-byte floor also keeps the length read inside the buffer on a fragment.
+            while (totalPackets > 0 && totalBuffer.length >= 8) {
+              const packetLength = totalBuffer.readUIntLE(4, 2)
+              if (totalBuffer.length < 8 + packetLength) break
+
+              // A realtime event and a chunk's closing CMD_ACK_OK carry none of the dataset.
+              // Counting their payload would push the chunk past its length. checkNotEventTCP
+              // above sees only a read that starts with an event, not one between frames.
+              const frameCommand = packetLength >= 2 ? totalBuffer.readUInt16LE(8) : null
+              if (frameCommand === COMMANDS.CMD_REG_EVENT || frameCommand === COMMANDS.CMD_ACK_OK) {
+                totalBuffer = totalBuffer.subarray(8 + packetLength)
+                continue
+              }
 
               realTotalBuffer = Buffer.concat([realTotalBuffer, totalBuffer.subarray(16, 8 + packetLength)])
               totalBuffer = totalBuffer.subarray(8 + packetLength)
+
+              // A chunk completes only on an exact length, so one that has run past it never
+              // will. Fail it now: waiting would only keep buffering whatever the peer sends,
+              // and with one copy per frame a flood of small frames costs CPU on every read.
+              if (realTotalBuffer.length > (totalPackets > 1 ? MAX_CHUNK : remain) + 8) {
+                internalCallback(replyData, new Error(`MALFORMED CHUNK: ${totalPackets} PACKETS REMAIN`))
+                return
+              }
 
               if ((totalPackets > 1 && realTotalBuffer.length === MAX_CHUNK + 8)
                 || (totalPackets === 1 && realTotalBuffer.length === remain + 8)) {
 
                 replyData = Buffer.concat([replyData, realTotalBuffer.subarray(8)])
-                totalBuffer = Buffer.from([])
+                // What follows a finished chunk is kept: with several chunks in flight it
+                // can already hold the start of the next one. The chunk's own CMD_ACK_OK is
+                // skipped above, so it adds nothing to the next chunk's data.
                 realTotalBuffer = Buffer.from([])
 
                 totalPackets -= 1
@@ -561,6 +588,7 @@ class ZKLibTCP {
 
                 if (totalPackets <= 0) {
                   internalCallback(replyData)
+                  return
                 }
               }
             }

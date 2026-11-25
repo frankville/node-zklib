@@ -313,6 +313,13 @@ Additional environment variables:
 - `ZKLIB_E2E_ACCESS_UID`, `ZKLIB_E2E_ACCESS_GROUP`, and `ZKLIB_E2E_ACCESS_TIMEZONE` to choose the temporary user/group/timezone for that e2e (defaults: uid 242, group 1, timezone 1).
 - `ZKLIB_E2E_UNLOCK_GROUPS=1` to enable the unlock-groups mutation e2e.
 - `ZKLIB_E2E_UNLOCK_COMBINATION` and `ZKLIB_E2E_UNLOCK_GROUP` to choose the temporary unlock combination/group (defaults: combination 2, group 1).
+- `ZKLIB_E2E_HOLD_MS` and `ZKLIB_E2E_READ_REPEAT` for the read-only TCP user-read framing e2e (`test/e2e-read-users-framing.spec.js`): how long it holds the socket's reads so the device's closing frames arrive in one read (default 500 ms), and how many natural reads follow (default 20). It prints counts only, unless `ZKLIB_E2E_LOG_LEVEL=trace`, whose packet dumps can include user records.
+
+To run only that read-only spec, name it rather than the glob, which also runs the mutating ones:
+
+```bash
+ZKLIB_E2E_IP=192.168.1.100 npx mocha --exit test/e2e-read-users-framing.spec.js
+```
 
 **Warning:** the end-to-end scenario mutates real users on the device. Use a dedicated UID or a lab unit.
 
